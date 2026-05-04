@@ -11,6 +11,11 @@ def analyze_normalized(normalized: dict):
     return {
         "decision": decision,
         "reason": reason,
+        "order": {
+            "entry": None,
+            "stopLoss": None,
+            "takeProfit": None
+        },
         "checks": {
             "premium_ok": premium >= 10000
         }
