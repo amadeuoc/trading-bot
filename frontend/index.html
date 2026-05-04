@@ -44,7 +44,6 @@ button { cursor:pointer; font-weight:bold; }
 }
 .system { background:#312e81; }
 .personal { background:#14532d; }
-.shared { background:#7c2d12; }
 pre {
   white-space:pre-wrap;
   font-size:12px;
@@ -83,11 +82,6 @@ pre {
   <label>
     <input id="showSystem" type="checkbox" checked>
     system
-  </label>
-
-  <label>
-    <input id="showShared" type="checkbox" checked>
-    shared
   </label>
 </div>
 <div id="alerts"></div>
@@ -128,7 +122,6 @@ const alertsMap = new Map();
 
 let personalInitialLoaded = false;
 let systemInitialLoaded = false;
-let sharedInitialLoaded = false;
 
 async function validateAlertWithBackend(alert) {
   try {
@@ -284,13 +277,11 @@ function trimAlerts() {
 function renderAll() {
   const showPersonal = document.getElementById("showPersonal").checked;
   const showSystem = document.getElementById("showSystem").checked;
-  const showShared = document.getElementById("showShared").checked;
 
   const list = [...alertsMap.values()]
     .filter(item => {
       if (item.source === "personal") return showPersonal;
       if (item.source === "system") return showSystem;
-      if (item.source === "shared") return showShared;
       return true;
     })
     .sort((a, b) => getTimestamp(b.data) - getTimestamp(a.data));
@@ -368,7 +359,6 @@ function renderAll() {
 
 document.getElementById("showPersonal").addEventListener("change", renderAll);
 document.getElementById("showSystem").addEventListener("change", renderAll);
-document.getElementById("showShared").addEventListener("change", renderAll);
 
 document.getElementById("loginBtn").onclick = async () => {
   try {
@@ -409,13 +399,6 @@ onAuthStateChanged(auth, (user) => {
     limit(100)
   );
 
-  const sharedQ = query(
-    col,
-    where("isSystemAlert", "==", false),
-    orderBy("timestamp", "desc"),
-    limit(100)
-  );
-
   onSnapshot(personalQ, (snap) => {
     snap.docChanges().forEach(change => {
       if (change.type !== "removed") {
@@ -440,23 +423,6 @@ onAuthStateChanged(auth, (user) => {
   }, (err) => {
     console.error("SYSTEM FIRESTORE ERROR", err);
     statusEl.textContent = "System listener error: " + err.message;
-  });
-
-  onSnapshot(sharedQ, (snap) => {
-    snap.docChanges().forEach(change => {
-      if (change.type !== "removed") {
-        const data = change.doc.data();
-
-        if (data.user !== user.email) {
-          addOrUpdateAlert(change.doc, "shared", !sharedInitialLoaded);
-        }
-      }
-    });
-
-    sharedInitialLoaded = true;
-  }, (err) => {
-    console.error("SHARED FIRESTORE ERROR", err);
-    statusEl.textContent = "Shared listener error: " + err.message;
   });
 
 });
