@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bullflow Alerts Viewer</title>
+
+<style>
+body {
+  background:#0f1115;
+  color:#f4f4f5;
+  font-family:Arial, sans-serif;
+  margin:24px;
+}
+input, button {
+  padding:10px;
+  border-radius:8px;
+  border:1px solid #333;
+  margin:4px;
+}
+button { cursor:pointer; font-weight:bold; }
+.card {
+  border:1px solid #2a2d35;
+  background:#171a21;
+  padding:14px;
+  margin:10px 0;
+  border-radius:12px;
+}
+.new {
+  border-color:#22c55e;
+  background:#13251a;
+}
+.meta {
+  color:#a1a1aa;
+  font-size:13px;
+}
+.badge {
+  display:inline-block;
+  padding:3px 8px;
+  border-radius:999px;
+  background:#272b35;
+  margin-right:5px;
+  font-size:12px;
+}
+.system { background:#312e81; }
+.personal { background:#14532d; }
+.shared { background:#7c2d12; }
+pre {
+  white-space:pre-wrap;
+  font-size:12px;
+  background:#09090b;
+  padding:10px;
+  border-radius:8px;
+  overflow:auto;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Bullflow Alerts Viewer</h2>
+
+<div>
+  <input id="email" placeholder="email">
+  <input id="password" type="password" placeholder="password">
+  <button id="loginBtn">Login</button>
+  <label>
+    <input id="soundToggle" type="checkbox" checked>
+    so en alertes noves
+  </label>
+</div>
+
+<hr>
+
+<div id="status">Not logged</div>
+<div id="counter">0 alertes</div>
+<div style="margin:12px 0">
+  <label>
+    <input id="showPersonal" type="checkbox" checked>
+    personal
+  </label>
+
+  <label>
+    <input id="showSystem" type="checkbox" checked>
+    system
+  </label>
+
+  <label>
+    <input id="showShared" type="checkbox" checked>
+    shared
+  </label>
+</div>
+<div id="alerts"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
+import {
+  getFirestore,
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  onSnapshot
+} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAfa3y-u4PdIgOmqrXVXJKV6Up5ntyZDJU",
+  authDomain: "liteflow-40a37.firebaseapp.com",
+  projectId: "liteflow-40a37"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const alertsEl = document.getElementById("alerts");
+const statusEl = document.getElementById("status");
+const counterEl = document.getElementById("counter");
+
+const MAX_ALERTS = 200;
+const alertsMap = new Map();
+
+let personalInitialLoaded = false;
+let systemInitialLoaded = false;
+let sharedInitialLoaded = false;
+
+async function validateAlertWithBackend(alert) {
+  try {
+    const res = await fetch("http://localhost:8000/analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ alert })
+    });
+
+    return await res.json();
+
+  } catch (err) {
+    console.error("BACKEND VALIDATION ERROR", err);
+    return {
+      status: "error",
+      decision: "SKIP",
+      reason: err.message
+    };
+  }
+}
+
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+
+function formatDate(ts) {
+  if (!ts) return "N/A";
+
+  if (ts > 1000000000000) {
+    ts = Math.floor(ts / 1000);
+  }
+
+  const d = new Date(ts * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+function money(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "";
+  if (Math.abs(x) >= 1000000) return "$" + (x / 1000000).toFixed(2) + "M";
+  if (Math.abs(x) >= 1000) return "$" + (x / 1000).toFixed(1) + "K";
+  return "$" + x.toFixed(2);
+}
+
+function parseOptionSymbol(sym = "") {
+  if (!sym.startsWith("O:")) return sym || "—";
+
+  const raw = sym.slice(2);
+  const idx = raw.search(/\d{6}/);
+  if (idx < 0) return sym;
+
+  const ticker = raw.slice(0, idx);
+  const yy = raw.slice(idx, idx + 2);
+  const mm = raw.slice(idx + 2, idx + 4);
+  const dd = raw.slice(idx + 4, idx + 6);
+  const type = raw[idx + 6] === "C" ? "CALL" : "PUT";
+  const strike = Number.parseInt(raw.slice(idx + 7), 10) / 1000;
+  const strikeTxt = Number.isInteger(strike) ? String(strike) : strike.toFixed(2);
+
+  return `${ticker} ${strikeTxt} ${type} 20${yy}-${mm}-${dd}`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function beep() {
+  if (!document.getElementById("soundToggle").checked) return;
+
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+
+  const ctx = new AudioContext();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.frequency.value = 880;
+  gain.gain.value = 0.06;
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start();
+
+  setTimeout(() => {
+    osc.stop();
+    ctx.close();
+  }, 180);
+}
+
+function getTimestamp(data) {
+  return Number(data.timestamp || data.ut || 0);
+}
+
+function alertKey(docId, data, source) {
+  return data.id || `${source}:${docId}`;
+}
+
+function addOrUpdateAlert(doc, source, isInitialLoad) {
+  const data = doc.data();
+  const key = alertKey(doc.id, data, source);
+
+  const alreadyExists = alertsMap.has(key);
+  const existing = alertsMap.get(key);
+
+  alertsMap.set(key, {
+    key,
+    source,
+    data,
+    isNew: !isInitialLoad && !alreadyExists,
+    receivedAt: Date.now(),
+    validation: existing?.validation || null
+  });
+
+  trimAlerts();
+
+  if (!isInitialLoad && !alreadyExists) {
+    beep();
+  }
+
+  if (!alreadyExists && !existing?.validation) {
+    validateAlertWithBackend(data).then(result => {
+      console.log("BACKEND RESULT", result);
+      const current = alertsMap.get(key);
+      if (current) {
+        current.validation = result;
+        alertsMap.set(key, current);
+        renderAll();
+      }
+    });
+  }
+
+  renderAll();
+}
+
+function trimAlerts() {
+  const sorted = [...alertsMap.values()]
+    .sort((a, b) => getTimestamp(b.data) - getTimestamp(a.data));
+
+  while (sorted.length > MAX_ALERTS) {
+    const old = sorted.pop();
+    alertsMap.delete(old.key);
+  }
+}
+
+function renderAll() {
+  const showPersonal = document.getElementById("showPersonal").checked;
+  const showSystem = document.getElementById("showSystem").checked;
+  const showShared = document.getElementById("showShared").checked;
+
+  const list = [...alertsMap.values()]
+    .filter(item => {
+      if (item.source === "personal") return showPersonal;
+      if (item.source === "system") return showSystem;
+      if (item.source === "shared") return showShared;
+      return true;
+    })
+    .sort((a, b) => getTimestamp(b.data) - getTimestamp(a.data));
+
+  alertsEl.innerHTML = "";
+  counterEl.textContent = `${list.length} alertes`;
+
+  for (const item of list) {
+    const data = item.data;
+
+    const title = data.filterName || data.topic || data.alertName || "Alert";
+    const symbol = data.symbol || data.sym || "";
+    const premium = data.alertPremium ?? data.premium ?? data.p ?? "";
+    const price = data.tradePrice ?? data.tp ?? "";
+    const tags = data.activeTags || data.tags || data.tg || [];
+    const execution = data.spread_execution || data.spreadExecution || data.se || "";
+    const ts = getTimestamp(data);
+    const decision = item.validation?.decision;
+
+    const div = document.createElement("div");
+    div.className = `card ${item.isNew ? "new" : ""}`;
+
+    if (decision === "VALID") {
+      div.style.borderColor = "#22c55e";
+      div.style.background = "#13251a";
+    }
+
+    if (decision === "REJECT") {
+      div.style.borderColor = "#ef4444";
+      div.style.background = "#2a1111";
+    }
+
+    div.innerHTML = `
+      <div>
+        <span class="badge ${item.source || ""}">${escapeHtml(item.source || "")}</span>
+        ${decision ? `<span class="badge">${escapeHtml(decision)}</span>` : ""}
+        <b>${escapeHtml(title)}</b>
+      </div>
+
+      <div style="margin-top:8px;font-size:18px">
+        ${escapeHtml(parseOptionSymbol(symbol))}
+      </div>
+
+      <div class="meta" style="margin-top:8px">
+        <span class="badge">Premium: ${escapeHtml(money(premium) || premium)}</span>
+        <span class="badge">Price: ${escapeHtml(price)}</span>
+        <span class="badge">Exec: ${escapeHtml(execution)}</span>
+        <span class="badge">Time: ${escapeHtml(formatDate(ts))}</span>
+      </div>
+
+      <div class="meta" style="margin-top:8px">
+        Tags: ${escapeHtml(Array.isArray(tags) ? tags.join(", ") : String(tags))}
+      </div>
+
+      <details style="margin-top:10px">
+        <summary>Raw JSON</summary>
+        <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+      </details>
+
+      ${item.validation ? `
+        <details style="margin-top:10px">
+          <summary>Validation result</summary>
+          <pre>${escapeHtml(JSON.stringify(item.validation, null, 2))}</pre>
+        </details>
+      ` : `
+        <div class="meta" style="margin-top:10px">
+          Validation: pending...
+        </div>
+      `}
+    `;
+
+    alertsEl.appendChild(div);
+  }
+}
+
+document.getElementById("showPersonal").addEventListener("change", renderAll);
+document.getElementById("showSystem").addEventListener("change", renderAll);
+document.getElementById("showShared").addEventListener("change", renderAll);
+
+document.getElementById("loginBtn").onclick = async () => {
+  try {
+    const email = document.getElementById("email").value.trim();
+    const pass = document.getElementById("password").value;
+
+    statusEl.textContent = "Logging in...";
+    await signInWithEmailAndPassword(auth, email, pass);
+
+  } catch (e) {
+    console.error("LOGIN ERROR", e);
+    statusEl.textContent = "Login error: " + e.message;
+    alert(e.message);
+  }
+};
+
+onAuthStateChanged(auth, (user) => {
+  if (!user) {
+    statusEl.textContent = "Not logged";
+    return;
+  }
+
+  statusEl.textContent = "Logged: " + user.email;
+
+  const col = collection(db, "_flow_alerts");
+
+  const personalQ = query(
+    col,
+    where("user", "==", user.email),
+    orderBy("timestamp", "desc"),
+    limit(100)
+  );
+
+  const systemQ = query(
+    col,
+    where("isSystemAlert", "==", true),
+    orderBy("timestamp", "desc"),
+    limit(100)
+  );
+
+  const sharedQ = query(
+    col,
+    where("isSystemAlert", "==", false),
+    orderBy("timestamp", "desc"),
+    limit(100)
+  );
+
+  onSnapshot(personalQ, (snap) => {
+    snap.docChanges().forEach(change => {
+      if (change.type !== "removed") {
+        addOrUpdateAlert(change.doc, "personal", !personalInitialLoaded);
+      }
+    });
+
+    personalInitialLoaded = true;
+  }, (err) => {
+    console.error("PERSONAL FIRESTORE ERROR", err);
+    statusEl.textContent = "Personal listener error: " + err.message;
+  });
+
+  onSnapshot(systemQ, (snap) => {
+    snap.docChanges().forEach(change => {
+      if (change.type !== "removed") {
+        addOrUpdateAlert(change.doc, "system", !systemInitialLoaded);
+      }
+    });
+
+    systemInitialLoaded = true;
+  }, (err) => {
+    console.error("SYSTEM FIRESTORE ERROR", err);
+    statusEl.textContent = "System listener error: " + err.message;
+  });
+
+  onSnapshot(sharedQ, (snap) => {
+    snap.docChanges().forEach(change => {
+      if (change.type !== "removed") {
+        const data = change.doc.data();
+
+        if (data.user !== user.email) {
+          addOrUpdateAlert(change.doc, "shared", !sharedInitialLoaded);
+        }
+      }
+    });
+
+    sharedInitialLoaded = true;
+  }, (err) => {
+    console.error("SHARED FIRESTORE ERROR", err);
+    statusEl.textContent = "Shared listener error: " + err.message;
+  });
+
+});
+
+window.validateAlertWithBackend = validateAlertWithBackend;
+window.addOrUpdateAlert = addOrUpdateAlert;
+
+</script>
+
+</body>
+</html>
