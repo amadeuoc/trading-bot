@@ -35,7 +35,7 @@ def normalize_alert(alert: dict):
     if option is None:
         return None
 
-    return {
+    normalized = {
         "underlying": option["underlying"],
 
         "option": {
@@ -58,7 +58,7 @@ def normalize_alert(alert: dict):
 
         "meta": {
             "spread_execution": alert.get("spread_execution"),
-            "ticker": alert.get("ticker") or alert.get("symbol"),
+            "ticker": None,
             "filterName": alert.get("filterName"),
             "source": alert.get("source"),
             "timestamp": alert.get("timestamp")
@@ -73,3 +73,11 @@ def normalize_alert(alert: dict):
             "symbol": symbol
         }
     }
+
+    normalized["meta"]["ticker"] = (
+        option.get("underlying")
+        or normalized.get("underlying")
+        or alert.get("ticker")
+    )
+
+    return normalized
