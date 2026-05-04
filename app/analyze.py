@@ -1,5 +1,9 @@
+from app.classify import classify_alert
+
+
 def analyze_normalized(normalized: dict):
     premium = normalized["trade"].get("premium") or 0
+    classification = classify_alert(normalized)
 
     if premium >= 10000:
         decision = "VALID"
@@ -11,6 +15,7 @@ def analyze_normalized(normalized: dict):
     return {
         "decision": decision,
         "reason": reason,
+        "classification": classification,
         "order": {
             "entry": None,
             "stopLoss": None,

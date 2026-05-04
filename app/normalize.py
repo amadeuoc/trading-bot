@@ -56,6 +56,14 @@ def normalize_alert(alert: dict):
             "user": alert.get("user")
         },
 
+        "meta": {
+            "spread_execution": alert.get("spread_execution"),
+            "ticker": alert.get("ticker") or alert.get("symbol"),
+            "filterName": alert.get("filterName"),
+            "source": alert.get("source"),
+            "timestamp": alert.get("timestamp")
+        },
+
         "market": {
             "timestamp": alert.get("timestamp")
         },
