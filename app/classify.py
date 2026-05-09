@@ -29,23 +29,40 @@ def classify_strategy(dte):
     return "leap"
 
 
+def get_execution_side(value):
+    execution = (value or "").upper()
+
+    if execution in ("AA", "A", "ASK"):
+        return "ask"
+    if execution in ("BB", "B", "BID"):
+        return "bid"
+    if execution == "MID":
+        return "mid"
+    return None
+
+
+def get_execution_aggressiveness(value):
+    execution = (value or "").upper()
+
+    if execution == "AA":
+        return "above_ask"
+    if execution in ("A", "ASK"):
+        return "ask"
+    if execution == "MID":
+        return "mid"
+    if execution in ("B", "BID"):
+        return "bid"
+    if execution == "BB":
+        return "below_bid"
+    return "unknown"
+
+
 def get_sentiment(normalized):
     option = normalized.get("option") or {}
     meta = normalized.get("meta") or {}
-    execution = meta.get("execution") or {}
 
     contract_type = (option.get("type") or "").upper()
-    side = execution.get("side")
-
-    if side is None:
-        spread_execution = (meta.get("spread_execution") or "").upper()
-
-        if spread_execution in ("AA", "A", "ASK"):
-            side = "ask"
-        elif spread_execution in ("BB", "B", "BID"):
-            side = "bid"
-        elif spread_execution == "MID":
-            side = "mid"
+    side = get_execution_side(meta.get("spread_execution"))
 
     if contract_type == "CALL" and side == "ask":
         return "bullish"
