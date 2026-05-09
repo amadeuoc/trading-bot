@@ -60,13 +60,9 @@ def get_execution_aggressiveness(value):
 def get_sentiment(normalized):
     option = normalized.get("option") or {}
     trade = normalized.get("trade") or {}
-    meta = normalized.get("meta") or {}
 
     contract_type = (option.get("type") or "").upper()
-    side = get_execution_side(
-        trade.get("spread_execution")
-        or meta.get("spread_execution")
-    )
+    side = get_execution_side(trade.get("spread_execution"))
 
     if contract_type == "CALL" and side == "ask":
         return "bullish"
@@ -81,13 +77,12 @@ def get_sentiment(normalized):
 
 
 def get_ticker(normalized):
-    meta = normalized.get("meta") or {}
-    return meta.get("ticker")
+    return normalized.get("underlying")
 
 
 def get_alert_timestamp(normalized):
-    meta = normalized.get("meta") or {}
-    timestamp = meta.get("timestamp")
+    alert = normalized.get("alert") or {}
+    timestamp = alert.get("timestamp")
 
     if timestamp is None:
         return int(time.time())
@@ -123,7 +118,8 @@ def add_to_flow(normalized, classification):
         return
 
     option = normalized.get("option") or {}
-    meta = normalized.get("meta") or {}
+    trade = normalized.get("trade") or {}
+    alert = normalized.get("alert") or {}
 
     ticker_flows.setdefault(ticker, []).append({
         "time": get_alert_timestamp(normalized),
@@ -131,9 +127,8 @@ def add_to_flow(normalized, classification):
         "dte": classification["dte"],
         "strategy": classification["strategy"],
         "contractType": option.get("type"),
-        "spread_execution": meta.get("spread_execution"),
-        "filterName": meta.get("filterName"),
-        "source": meta.get("source")
+        "spread_execution": trade.get("spread_execution"),
+        "filterName": alert.get("filterName")
     })
 
     print(
@@ -141,7 +136,7 @@ def add_to_flow(normalized, classification):
         ticker,
         option.get("symbol"),
         classification["sentiment"],
-        meta.get("spread_execution"),
+        trade.get("spread_execution"),
         len(ticker_flows[ticker])
     )
 
