@@ -32,20 +32,28 @@ def classify_strategy(dte):
 def get_sentiment(normalized):
     option = normalized.get("option") or {}
     meta = normalized.get("meta") or {}
+    execution = meta.get("execution") or {}
 
     contract_type = (option.get("type") or "").upper()
-    spread_execution = (meta.get("spread_execution") or "").upper()
+    side = execution.get("side")
 
-    if not spread_execution or spread_execution == "MID":
-        return "neutral"
+    if side is None:
+        spread_execution = (meta.get("spread_execution") or "").upper()
 
-    if contract_type == "CALL" and spread_execution == "ASK":
+        if spread_execution in ("AA", "A", "ASK"):
+            side = "ask"
+        elif spread_execution in ("BB", "B", "BID"):
+            side = "bid"
+        elif spread_execution == "MID":
+            side = "mid"
+
+    if contract_type == "CALL" and side == "ask":
         return "bullish"
-    if contract_type == "CALL" and spread_execution == "BID":
+    if contract_type == "CALL" and side == "bid":
         return "bearish"
-    if contract_type == "PUT" and spread_execution == "ASK":
+    if contract_type == "PUT" and side == "ask":
         return "bearish"
-    if contract_type == "PUT" and spread_execution == "BID":
+    if contract_type == "PUT" and side == "bid":
         return "bullish"
 
     return "neutral"

@@ -28,6 +28,36 @@ def parse_option_symbol(symbol: str):
     }
 
 
+def normalize_spread_execution(value):
+    raw = value
+    execution = (value or "").upper()
+
+    if execution == "AA":
+        side = "ask"
+        aggressiveness = "above_ask"
+    elif execution == "A":
+        side = "ask"
+        aggressiveness = "ask"
+    elif execution == "MID":
+        side = "mid"
+        aggressiveness = "mid"
+    elif execution == "B":
+        side = "bid"
+        aggressiveness = "bid"
+    elif execution == "BB":
+        side = "bid"
+        aggressiveness = "below_bid"
+    else:
+        side = None
+        aggressiveness = "unknown"
+
+    return {
+        "raw": raw,
+        "side": side,
+        "aggressiveness": aggressiveness
+    }
+
+
 def normalize_alert(alert: dict):
     symbol = alert.get("symbol")
     option = parse_option_symbol(symbol)
@@ -58,6 +88,7 @@ def normalize_alert(alert: dict):
 
         "meta": {
             "spread_execution": alert.get("spread_execution"),
+            "execution": normalize_spread_execution(alert.get("spread_execution")),
             "ticker": None,
             "filterName": alert.get("filterName"),
             "source": alert.get("source"),
