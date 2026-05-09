@@ -47,7 +47,16 @@ def normalize_alert(alert: dict):
 
         "trade": {
             "price": alert.get("tradePrice"),
-            "premium": alert.get("alertPremium")
+            "premium": alert.get("alertPremium"),
+            "spread_execution": alert.get("spread_execution")
+        },
+
+        "alert": {
+            "id": alert.get("id"),
+            "type": alert.get("alertType"),
+            "filterName": alert.get("filterName"),
+            "user": alert.get("user"),
+            "timestamp": alert.get("timestamp")
         },
 
         "context": {

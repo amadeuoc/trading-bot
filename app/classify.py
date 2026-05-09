@@ -59,10 +59,14 @@ def get_execution_aggressiveness(value):
 
 def get_sentiment(normalized):
     option = normalized.get("option") or {}
+    trade = normalized.get("trade") or {}
     meta = normalized.get("meta") or {}
 
     contract_type = (option.get("type") or "").upper()
-    side = get_execution_side(meta.get("spread_execution"))
+    side = get_execution_side(
+        trade.get("spread_execution")
+        or meta.get("spread_execution")
+    )
 
     if contract_type == "CALL" and side == "ask":
         return "bullish"
