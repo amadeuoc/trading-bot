@@ -107,6 +107,15 @@ def add_to_flow(normalized, classification):
         "source": meta.get("source")
     })
 
+    print(
+        "[FLOW]",
+        ticker,
+        option.get("symbol"),
+        classification["sentiment"],
+        meta.get("spread_execution"),
+        len(ticker_flows[ticker])
+    )
+
 
 def get_ticker_alerts_today(ticker):
     if not ticker:
