@@ -26,7 +26,7 @@ def classify_strategy(dte):
         return "short"
     if dte <= 90:
         return "swing"
-    return "long"
+    return "leap"
 
 
 def get_sentiment(normalized):
