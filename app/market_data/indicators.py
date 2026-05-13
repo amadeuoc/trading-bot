@@ -10,6 +10,13 @@ def _safe_float(value) -> Optional[float]:
     return result
 
 
+def _safe_positive_float(value) -> Optional[float]:
+    result = _safe_float(value)
+    if result is None or result <= 0:
+        return None
+    return result
+
+
 def _get_alert_price(normalized: dict) -> Optional[float]:
     trade = normalized.get("trade") or {}
     alert = normalized.get("alert") or {}
@@ -25,7 +32,7 @@ def _calculate_price_deviation_pct(normalized: dict, market_context: dict) -> Op
     option_market = market_context.get("option") or {}
 
     alert_price = _get_alert_price(normalized)
-    current_option_price = _safe_float(option_market.get("ask"))
+    current_option_price = _safe_positive_float(option_market.get("ask"))
 
     if alert_price is None or alert_price == 0 or current_option_price is None:
         return None
@@ -36,8 +43,8 @@ def _calculate_price_deviation_pct(normalized: dict, market_context: dict) -> Op
 def _calculate_spread_abs(market_context: dict) -> Optional[float]:
     option = market_context.get("option") or {}
 
-    bid = _safe_float(option.get("bid"))
-    ask = _safe_float(option.get("ask"))
+    bid = _safe_positive_float(option.get("bid"))
+    ask = _safe_positive_float(option.get("ask"))
 
     if bid is None or ask is None:
         return None
@@ -48,8 +55,8 @@ def _calculate_spread_abs(market_context: dict) -> Optional[float]:
 def _calculate_spread_pct(market_context: dict) -> Optional[float]:
     option = market_context.get("option") or {}
 
-    bid = _safe_float(option.get("bid"))
-    ask = _safe_float(option.get("ask"))
+    bid = _safe_positive_float(option.get("bid"))
+    ask = _safe_positive_float(option.get("ask"))
 
     if bid is None or ask is None:
         return None

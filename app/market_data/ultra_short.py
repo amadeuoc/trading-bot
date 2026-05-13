@@ -1,11 +1,8 @@
 import math
 from typing import Any, Dict, List, Optional
 
+from app.market_data.ibkr import ibkr_session
 
-IB_HOST = "127.0.0.1"
-IB_PAPER_PORT = 7497
-IB_LIVE_PORT = 7496
-IB_CLIENT_ID = 17
 IB_EXCHANGE = "SMART"
 IB_CURRENCY = "USD"
 IB_QUOTE_WAIT_SECONDS = 1.5
@@ -46,17 +43,6 @@ def _ib_option_expiration(expiration: Optional[str]) -> Optional[str]:
 def _get_option_underlying(normalized: dict) -> Optional[str]:
     option = normalized.get("option") or {}
     return option.get("underlying")
-
-
-def _connect_ib():
-    from ib_insync import IB
-
-    ib = IB()
-
-    # TWS/Gateway defaults: 7497 is paper trading, 7496 is live trading.
-    # Keep this provider on paper by default until execution/risk controls exist.
-    ib.connect(IB_HOST, IB_PAPER_PORT, clientId=IB_CLIENT_ID)
-    return ib
 
 
 def _get_underlying_price(ib, ticker_symbol: str) -> Optional[float]:
@@ -215,29 +201,24 @@ def _get_option_chain_oi_proxy(
 
 
 def get_ultra_short_market_context(normalized: dict) -> Dict[str, Any]:
-    ib = None
     context = _empty_market_context()
 
     try:
-        ib = _connect_ib()
-        underlying = _get_option_underlying(normalized)
-        if not underlying:
-            return context
+        with ibkr_session() as ib:
+            underlying = _get_option_underlying(normalized)
+            if not underlying:
+                return context
 
-        current_price = _get_underlying_price(ib, underlying)
-        context["underlying"]["price"] = current_price
-        context["option"] = _get_option_quote(ib, normalized)
-        context["optionChain"] = _get_option_chain_oi_proxy(
-            ib,
-            normalized,
-            current_price
-        )
+            current_price = _get_underlying_price(ib, underlying)
+            context["underlying"]["price"] = current_price
+            context["option"] = _get_option_quote(ib, normalized)
+            context["optionChain"] = _get_option_chain_oi_proxy(
+                ib,
+                normalized,
+                current_price
+            )
 
     except Exception as exc:
         print("[MARKET_DATA_ERROR]", exc)
-
-    finally:
-        if ib is not None and ib.isConnected():
-            ib.disconnect()
 
     return context
