@@ -39,6 +39,7 @@ def normalize_alert(alert: dict):
         "underlying": option["underlying"],
 
         "option": {
+            "underlying": option["underlying"],
             "symbol": symbol,
             "type": option["type"],
             "strike": option["strike"],

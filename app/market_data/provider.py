@@ -1,12 +1,27 @@
-from app.market_data.models import MarketContext, MarketIndicators
+from typing import Any, Dict
+
+from app.market_data.ultra_short import get_ultra_short_market_context
 
 
-def get_market_context(normalized: dict, classification: dict) -> MarketContext:
+def _empty_market_context() -> Dict[str, Any]:
+    return {
+        "option": {
+            "ask": None,
+            "bid": None,
+            "volume": None,
+            "openInterest": None,
+        },
+        "underlying": {
+            "price": None,
+        },
+        "optionChain": [],
+    }
+
+
+def get_market_context(normalized: dict, classification: dict) -> Dict[str, Any]:
     strategy = classification.get("strategy") if isinstance(classification, dict) else None
 
-    # Future behavior will depend on strategy:
-    # - ultra_short: option bid/ask/spread/liquidity/current underlying price.
-    # - short/swing/leap: candles, RSI, ATR, support/resistance, IV/HV, trend context.
-    _ = strategy
+    if strategy == "ultra_short":
+        return get_ultra_short_market_context(normalized)
 
-    return MarketContext(indicators=MarketIndicators())
+    return _empty_market_context()
