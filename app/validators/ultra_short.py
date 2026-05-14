@@ -144,16 +144,11 @@ def validate_ultra_short(
     )
 
     spread_pct = _safe_float(indicators.get("spread_pct"))
-    spread_abs = _safe_float(indicators.get("spread_abs"))
     spread_failures = []
     if spread_pct is None:
         spread_failures.append("spread_pct is missing")
     elif spread_pct > 10:
         spread_failures.append("spread_pct is above 10%")
-    if spread_abs is None:
-        spread_failures.append("spread_abs is missing")
-    elif spread_abs > 0.15:
-        spread_failures.append("spread_abs is above 0.15")
 
     _add_check(
         checks,
@@ -161,8 +156,7 @@ def validate_ultra_short(
         not spread_failures,
         "Spread is acceptable" if not spread_failures else "; ".join(spread_failures),
         {
-            "spread_pct": spread_pct,
-            "spread_abs": spread_abs
+            "spread_pct": spread_pct
         }
     )
 
@@ -180,15 +174,16 @@ def validate_ultra_short(
 
     failed_checks = [check for check in checks if not check["passed"]]
     decision = "VALID" if not failed_checks else "REJECT"
+    reason = "Ultra short validation passed"
+
+    if decision == "REJECT":
+        failed_reasons = [check["reason"] for check in failed_checks]
+        reason = "Ultra short validation failed: " + "; ".join(failed_reasons)
 
     return {
         "validator": "ultra_short",
         "decision": decision,
-        "reason": (
-            "Ultra short validation passed"
-            if decision == "VALID"
-            else "Ultra short validation failed"
-        ),
+        "reason": reason,
         "checks": checks,
         "failedChecks": failed_checks,
         "riskReward": risk_reward,

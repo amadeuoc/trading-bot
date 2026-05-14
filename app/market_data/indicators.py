@@ -40,18 +40,6 @@ def _calculate_price_deviation_pct(normalized: dict, market_context: dict) -> Op
     return ((current_option_price - alert_price) / alert_price) * 100
 
 
-def _calculate_spread_abs(market_context: dict) -> Optional[float]:
-    option = market_context.get("option") or {}
-
-    bid = _safe_positive_float(option.get("bid"))
-    ask = _safe_positive_float(option.get("ask"))
-
-    if bid is None or ask is None:
-        return None
-
-    return ask - bid
-
-
 def _calculate_spread_pct(market_context: dict) -> Optional[float]:
     option = market_context.get("option") or {}
 
@@ -112,7 +100,6 @@ def calculate_indicators(normalized: dict, market_context: dict) -> dict:
 
     return {
         "price_deviation_pct": _calculate_price_deviation_pct(normalized, market_context),
-        "spread_abs": _calculate_spread_abs(market_context),
         "spread_pct": _calculate_spread_pct(market_context),
         **support_resistance
     }
