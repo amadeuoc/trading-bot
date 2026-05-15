@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Any, Dict, List, Optional
 
 from app.market_data.ibkr import ibkr_session
@@ -6,6 +7,20 @@ from app.market_data.ibkr import ibkr_session
 IB_EXCHANGE = "SMART"
 IB_CURRENCY = "USD"
 IB_QUOTE_WAIT_SECONDS = 1.5
+DEBUG_OPTION_CHAIN = os.getenv("DEBUG_OPTION_CHAIN", "").lower() in ("1", "true", "yes")
+
+
+def _should_debug_option_chain(underlying: Optional[str]) -> bool:
+    return DEBUG_OPTION_CHAIN or underlying == "MSFT"
+
+
+def _debug_option_chain(underlying: Optional[str], message: str, data=None) -> None:
+    if not _should_debug_option_chain(underlying):
+        return
+    if data is None:
+        print("[OPTION_CHAIN_DEBUG]", underlying, message)
+    else:
+        print("[OPTION_CHAIN_DEBUG]", underlying, message, data)
 
 
 def _empty_market_context() -> Dict[str, Any]:
@@ -119,6 +134,14 @@ def _get_option_chain_oi_proxy(
     option = normalized.get("option") or {}
     underlying = option.get("underlying")
     expiration = _ib_option_expiration(option.get("expiration"))
+    target_strike = option.get("strike")
+
+    _debug_option_chain(underlying, "request", {
+        "optionSymbol": option.get("symbol"),
+        "targetExpiration": expiration,
+        "targetStrike": target_strike,
+        "underlyingPrice": current_price
+    })
 
     stock = Stock(underlying, IB_EXCHANGE, IB_CURRENCY)
     qualified = ib.qualifyContracts(stock)
@@ -132,29 +155,64 @@ def _get_option_chain_oi_proxy(
         stock.conId
     )
 
-    chain = next(
-        (
-            item for item in chains
-            if item.exchange == IB_EXCHANGE and expiration in item.expirations
-        ),
-        None
-    )
-    if chain is None:
-        chain = next(
-            (item for item in chains if expiration in item.expirations),
-            None
-        )
-    if chain is None:
+    _debug_option_chain(underlying, "raw chains", {
+        "count": len(chains),
+        "first3": [
+            {
+                "exchange": item.exchange,
+                "tradingClass": item.tradingClass,
+                "expirations": sorted(item.expirations)[:5],
+                "strikeCount": len(item.strikes)
+            }
+            for item in chains[:3]
+        ],
+        "availableExpirations": sorted({
+            exp
+            for item in chains
+            for exp in item.expirations
+        })[:20]
+    })
+
+    matching_chains = [
+        item for item in chains
+        if expiration in item.expirations
+    ]
+    if not matching_chains:
+        _debug_option_chain(underlying, "no chains after expiration filter", {
+            "targetExpiration": expiration
+        })
         return []
 
+    smart_chains = [item for item in matching_chains if item.exchange == IB_EXCHANGE]
+    selected_chains = smart_chains or matching_chains
+    strikes = sorted({
+        strike
+        for item in selected_chains
+        for strike in item.strikes
+    })
+
+    _debug_option_chain(underlying, "after expiration filter", {
+        "matchingChains": len(matching_chains),
+        "selectedChains": len(selected_chains),
+        "selectedExchanges": sorted({item.exchange for item in selected_chains}),
+        "rawStrikeCount": len(strikes)
+    })
+
     call_strikes = [
-        strike for strike in chain.strikes
+        strike for strike in strikes
         if current_price < strike <= current_price * 1.05
     ]
     put_strikes = [
-        strike for strike in chain.strikes
+        strike for strike in strikes
         if current_price * 0.95 <= strike < current_price
     ]
+
+    _debug_option_chain(underlying, "after strike filter", {
+        "callStrikeCount": len(call_strikes),
+        "putStrikeCount": len(put_strikes),
+        "callStrikes": sorted(call_strikes)[:20],
+        "putStrikes": sorted(put_strikes)[:20]
+    })
 
     # For ultra-short flow we need nearby option pressure on both sides:
     # calls above spot for resistance context and puts below spot for support
@@ -196,6 +254,10 @@ def _get_option_chain_oi_proxy(
             })
 
             ib.cancelMktData(contract)
+
+    _debug_option_chain(underlying, "final optionChain", {
+        "length": len(rows)
+    })
 
     return rows
 

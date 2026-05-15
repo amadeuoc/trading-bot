@@ -120,8 +120,15 @@ def add_to_flow(normalized, classification):
     option = normalized.get("option") or {}
     trade = normalized.get("trade") or {}
     alert = normalized.get("alert") or {}
+    alert_id = alert.get("id")
+
+    if alert_id:
+        for existing in ticker_flows.get(ticker, []):
+            if existing.get("id") == alert_id:
+                return
 
     ticker_flows.setdefault(ticker, []).append({
+        "id": alert_id,
         "time": get_alert_timestamp(normalized),
         "sentiment": classification["sentiment"],
         "dte": classification["dte"],

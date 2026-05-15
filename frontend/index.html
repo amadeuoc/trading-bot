@@ -223,6 +223,22 @@ function getTimestamp(data) {
   return Number(data.timestamp || data.ut || 0);
 }
 
+function getStartOfTodaySeconds() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.floor(start.getTime() / 1000);
+}
+
+function isAlertFromToday(data, startOfTodaySeconds) {
+  let ts = getTimestamp(data);
+
+  if (ts > 1000000000000) {
+    ts = Math.floor(ts / 1000);
+  }
+
+  return ts >= startOfTodaySeconds;
+}
+
 function alertKey(docId, data, source) {
   return data.id || `${source}:${docId}`;
 }
@@ -384,10 +400,16 @@ onAuthStateChanged(auth, (user) => {
   statusEl.textContent = "Logged: " + user.email;
 
   const col = collection(db, "_flow_alerts");
+  const startOfTodaySeconds = getStartOfTodaySeconds();
+
+  console.log("[ALERTS_TODAY_FILTER]", {
+    startOfTodaySeconds
+  });
 
   const personalQ = query(
     col,
     where("user", "==", user.email),
+    where("timestamp", ">=", startOfTodaySeconds),
     orderBy("timestamp", "desc"),
     limit(100)
   );
@@ -395,12 +417,25 @@ onAuthStateChanged(auth, (user) => {
   const systemQ = query(
     col,
     where("isSystemAlert", "==", true),
+    where("timestamp", ">=", startOfTodaySeconds),
     orderBy("timestamp", "desc"),
     limit(100)
   );
 
   onSnapshot(personalQ, (snap) => {
-    snap.docChanges().forEach(change => {
+    const changes = snap.docChanges()
+      .filter(change => change.type !== "removed");
+    const todayChanges = changes
+      .filter(change => isAlertFromToday(change.doc.data(), startOfTodaySeconds));
+
+    console.log("[ALERTS_TODAY_FILTER]", {
+      source: "personal",
+      startOfTodaySeconds,
+      received: changes.length,
+      kept: todayChanges.length
+    });
+
+    todayChanges.forEach(change => {
       if (change.type !== "removed") {
         addOrUpdateAlert(change.doc, "personal", !personalInitialLoaded);
       }
@@ -413,7 +448,19 @@ onAuthStateChanged(auth, (user) => {
   });
 
   onSnapshot(systemQ, (snap) => {
-    snap.docChanges().forEach(change => {
+    const changes = snap.docChanges()
+      .filter(change => change.type !== "removed");
+    const todayChanges = changes
+      .filter(change => isAlertFromToday(change.doc.data(), startOfTodaySeconds));
+
+    console.log("[ALERTS_TODAY_FILTER]", {
+      source: "system",
+      startOfTodaySeconds,
+      received: changes.length,
+      kept: todayChanges.length
+    });
+
+    todayChanges.forEach(change => {
       if (change.type !== "removed") {
         addOrUpdateAlert(change.doc, "system", !systemInitialLoaded);
       }
