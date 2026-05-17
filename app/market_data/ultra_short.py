@@ -2,11 +2,13 @@ import math
 import os
 from typing import Any, Dict, List, Optional
 
+from app.market_data.gex import build_gex_context
 from app.market_data.ibkr import ibkr_session
 
 IB_EXCHANGE = "SMART"
 IB_CURRENCY = "USD"
 IB_QUOTE_WAIT_SECONDS = 1.5
+GEX_ULTRA_SHORT_RANGE_PCT = 0.05
 DEBUG_OPTION_CHAIN = os.getenv("DEBUG_OPTION_CHAIN", "").lower() in ("1", "true", "yes")
 
 
@@ -58,6 +60,42 @@ def _ib_option_expiration(expiration: Optional[str]) -> Optional[str]:
 def _get_option_underlying(normalized: dict) -> Optional[str]:
     option = normalized.get("option") or {}
     return option.get("underlying")
+
+
+def _get_option_dte(normalized: dict) -> Optional[int]:
+    option = normalized.get("option") or {}
+    expiration = option.get("expiration")
+    if not expiration:
+        return None
+
+    try:
+        from datetime import date, datetime
+
+        expiration_date = datetime.strptime(expiration, "%Y-%m-%d").date()
+        return max((expiration_date - date.today()).days, 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_option_gamma(ticker) -> Optional[float]:
+    for attr in ("modelGreeks", "lastGreeks", "bidGreeks", "askGreeks"):
+        greeks = getattr(ticker, attr, None)
+        gamma = _safe_float(getattr(greeks, "gamma", None)) if greeks else None
+        if gamma is not None:
+            return gamma
+    return None
+
+
+def _get_option_last(ticker) -> Optional[float]:
+    last = _safe_float(getattr(ticker, "last", None))
+    if last is not None and last > 0:
+        return last
+
+    market_price = _safe_float(ticker.marketPrice())
+    if market_price is not None and market_price > 0:
+        return market_price
+
+    return None
 
 
 def _get_underlying_price(ib, ticker_symbol: str) -> Optional[float]:
@@ -113,8 +151,10 @@ def _get_option_quote(ib, normalized: dict) -> Dict[str, Optional[float]]:
     quote = {
         "ask": _safe_float(ticker.ask),
         "bid": _safe_float(ticker.bid),
+        "last": _get_option_last(ticker),
         "volume": _safe_float(ticker.volume),
-        "openInterest": open_interest
+        "openInterest": open_interest,
+        "gamma": _get_option_gamma(ticker)
     }
 
     ib.cancelMktData(contract)
@@ -134,6 +174,8 @@ def _get_option_chain_oi_proxy(
     option = normalized.get("option") or {}
     underlying = option.get("underlying")
     expiration = _ib_option_expiration(option.get("expiration"))
+    display_expiration = option.get("expiration") or expiration
+    dte = _get_option_dte(normalized)
     target_strike = option.get("strike")
 
     _debug_option_chain(underlying, "request", {
@@ -198,29 +240,25 @@ def _get_option_chain_oi_proxy(
         "rawStrikeCount": len(strikes)
     })
 
-    call_strikes = [
+    strikes_in_range = [
         strike for strike in strikes
-        if current_price < strike <= current_price * 1.05
-    ]
-    put_strikes = [
-        strike for strike in strikes
-        if current_price * 0.95 <= strike < current_price
+        if current_price * (1 - GEX_ULTRA_SHORT_RANGE_PCT)
+        <= strike
+        <= current_price * (1 + GEX_ULTRA_SHORT_RANGE_PCT)
     ]
 
     _debug_option_chain(underlying, "after strike filter", {
-        "callStrikeCount": len(call_strikes),
-        "putStrikeCount": len(put_strikes),
-        "callStrikes": sorted(call_strikes)[:20],
-        "putStrikes": sorted(put_strikes)[:20]
+        "rangePct": GEX_ULTRA_SHORT_RANGE_PCT,
+        "strikeCount": len(strikes_in_range),
+        "strikes": sorted(strikes_in_range)[:40]
     })
 
-    # For ultra-short flow we need nearby option pressure on both sides:
-    # calls above spot for resistance context and puts below spot for support
-    # context. Filtering to +/- 5% keeps IBKR snapshot requests small.
+    # GEX needs both calls and puts on both sides of spot. A put above spot or
+    # a call below spot can still be the nearest relevant wall.
     rows = []
     for option_type, right, strikes in (
-        ("CALL", "C", sorted(call_strikes)),
-        ("PUT", "P", sorted(put_strikes)),
+        ("CALL", "C", sorted(strikes_in_range)),
+        ("PUT", "P", sorted(strikes_in_range)),
     ):
         for strike in strikes:
             contract = Option(
@@ -245,12 +283,16 @@ def _get_option_chain_oi_proxy(
             )
 
             rows.append({
+                "expiry": display_expiration,
+                "dte": dte,
                 "strike": _safe_float(strike),
-                "type": option_type,
-                "openInterest": open_interest,
+                "option_type": option_type,
+                "gamma": _get_option_gamma(ticker),
+                "open_interest": open_interest,
                 "volume": _safe_float(ticker.volume),
                 "bid": _safe_float(ticker.bid),
-                "ask": _safe_float(ticker.ask)
+                "ask": _safe_float(ticker.ask),
+                "last": _get_option_last(ticker)
             })
 
             ib.cancelMktData(contract)
@@ -260,6 +302,58 @@ def _get_option_chain_oi_proxy(
     })
 
     return rows
+
+
+def _attach_gex_context(
+    context: Dict[str, Any],
+    current_price: Optional[float],
+    underlying: Optional[str]
+) -> None:
+    option_chain = context.get("optionChain") or []
+    rows_with_gamma = [
+        row for row in option_chain
+        if _safe_float(row.get("gamma")) is not None
+    ]
+
+    debug_data = {
+        "optionChainRows": len(option_chain),
+        "rowsWithGamma": len(rows_with_gamma),
+        "rowsWithOI": len([row for row in option_chain if row.get("open_interest") is not None]),
+        "rowsWithVolume": len([row for row in option_chain if row.get("volume") is not None]),
+        "gexBuilt": False
+    }
+
+    if current_price is None or current_price <= 0 or not option_chain or not rows_with_gamma:
+        context["gex_context"] = None
+        _debug_option_chain(underlying, "gex context", debug_data)
+        return
+
+    gex_context = build_gex_context(
+        option_chain,
+        current_price,
+        dte_max=7,
+        range_pct=GEX_ULTRA_SHORT_RANGE_PCT,
+        source="ibkr"
+    )
+    context["gex_context"] = gex_context.model_dump()
+    debug_data["gexBuilt"] = True
+    debug_data["nearestWallAbove"] = (
+        {
+            "strike": gex_context.nearest_wall_above.strike,
+            "option_type": gex_context.nearest_wall_above.option_type,
+            "sign": gex_context.nearest_wall_above.sign
+        }
+        if gex_context.nearest_wall_above else None
+    )
+    debug_data["nearestWallBelow"] = (
+        {
+            "strike": gex_context.nearest_wall_below.strike,
+            "option_type": gex_context.nearest_wall_below.option_type,
+            "sign": gex_context.nearest_wall_below.sign
+        }
+        if gex_context.nearest_wall_below else None
+    )
+    _debug_option_chain(underlying, "gex context", debug_data)
 
 
 def get_ultra_short_market_context(normalized: dict) -> Dict[str, Any]:
@@ -279,6 +373,7 @@ def get_ultra_short_market_context(normalized: dict) -> Dict[str, Any]:
                 normalized,
                 current_price
             )
+            _attach_gex_context(context, current_price, underlying)
 
     except Exception as exc:
         print("[MARKET_DATA_ERROR]", exc)
