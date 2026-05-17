@@ -1,6 +1,8 @@
 import math
 from typing import Any, Optional
 
+from app.market_data.gex import compute_stop_buffer, compute_target_buffer
+
 
 def _safe_float(value) -> Optional[float]:
     try:
@@ -40,6 +42,147 @@ def _empty_risk_reward() -> dict:
         "reward": None,
         "risk_reward": None
     }
+
+
+def _get_value(source, key):
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source.get(key)
+    return getattr(source, key, None)
+
+
+def _wall_to_dict(wall):
+    if wall is None:
+        return None
+    if isinstance(wall, dict):
+        return wall
+    if hasattr(wall, "model_dump"):
+        return wall.model_dump()
+    return wall
+
+
+def _empty_gex_order(spot=None, reason="No GEX context available"):
+    return {
+        "entry": spot,
+        "stopLoss": None,
+        "takeProfit": None,
+        "targetMode": "unknown",
+        "trailing": {
+            "enabled": False,
+            "activationLevel": None,
+            "direction": None
+        },
+        "gexReason": reason,
+        "gexWalls": {
+            "targetWall": None,
+            "stopWall": None
+        },
+        "checks": []
+    }
+
+
+def _add_gex_order_check(order, passed: bool, reason: str, value: Any = None):
+    order["checks"].append({
+        "name": "gex_order",
+        "passed": passed,
+        "reason": reason,
+        "value": value
+    })
+
+
+def _validate_gex_order_sides(order, alert_side, spot):
+    if alert_side == "CALL":
+        if order["takeProfit"] is not None and order["takeProfit"] <= spot:
+            _add_gex_order_check(order, False, "CALL takeProfit must be above entry", order["takeProfit"])
+            order["takeProfit"] = None
+        if order["stopLoss"] is not None and order["stopLoss"] >= spot:
+            _add_gex_order_check(order, False, "CALL stopLoss must be below entry", order["stopLoss"])
+            order["stopLoss"] = None
+
+    if alert_side == "PUT":
+        if order["takeProfit"] is not None and order["takeProfit"] >= spot:
+            _add_gex_order_check(order, False, "PUT takeProfit must be below entry", order["takeProfit"])
+            order["takeProfit"] = None
+        if order["stopLoss"] is not None and order["stopLoss"] <= spot:
+            _add_gex_order_check(order, False, "PUT stopLoss must be above entry", order["stopLoss"])
+            order["stopLoss"] = None
+
+
+def build_ultra_short_gex_order(alert_side, spot, gex_context):
+    spot = _safe_float(spot)
+    if spot is None or spot <= 0:
+        return _empty_gex_order(spot, "Cannot build GEX order without valid spot")
+
+    if gex_context is None:
+        return _empty_gex_order(spot)
+
+    target_buffer = compute_target_buffer(spot)
+    stop_buffer = compute_stop_buffer(spot)
+    nearest_above = _get_value(gex_context, "nearest_wall_above")
+    nearest_below = _get_value(gex_context, "nearest_wall_below")
+
+    order = _empty_gex_order(spot, "GEX order built from nearest walls")
+
+    if alert_side == "CALL":
+        target_wall = nearest_above
+        stop_wall = nearest_below
+        order["gexWalls"]["targetWall"] = _wall_to_dict(target_wall)
+        order["gexWalls"]["stopWall"] = _wall_to_dict(stop_wall)
+
+        if target_wall is None:
+            _add_gex_order_check(order, True, "No nearest wall above for CALL target")
+        elif _get_value(target_wall, "sign") == "negative":
+            order["targetMode"] = "none_trailing_after_wall"
+            order["trailing"] = {
+                "enabled": True,
+                "activationLevel": _get_value(target_wall, "strike"),
+                "direction": "up"
+            }
+        else:
+            order["targetMode"] = "fixed"
+            order["takeProfit"] = _get_value(target_wall, "strike") - target_buffer
+
+        if stop_wall is None:
+            _add_gex_order_check(order, True, "No nearest wall below for CALL stop")
+        elif _get_value(stop_wall, "sign") == "negative":
+            order["stopLoss"] = _get_value(stop_wall, "strike") + stop_buffer
+        else:
+            order["stopLoss"] = _get_value(stop_wall, "strike") - stop_buffer
+
+    elif alert_side == "PUT":
+        target_wall = nearest_below
+        stop_wall = nearest_above
+        order["gexWalls"]["targetWall"] = _wall_to_dict(target_wall)
+        order["gexWalls"]["stopWall"] = _wall_to_dict(stop_wall)
+
+        if target_wall is None:
+            _add_gex_order_check(order, True, "No nearest wall below for PUT target")
+        elif _get_value(target_wall, "sign") == "negative":
+            order["targetMode"] = "none_trailing_after_wall"
+            order["trailing"] = {
+                "enabled": True,
+                "activationLevel": _get_value(target_wall, "strike"),
+                "direction": "down"
+            }
+        else:
+            order["targetMode"] = "fixed"
+            order["takeProfit"] = _get_value(target_wall, "strike") + target_buffer
+
+        if stop_wall is None:
+            _add_gex_order_check(order, True, "No nearest wall above for PUT stop")
+        elif _get_value(stop_wall, "sign") == "negative":
+            order["stopLoss"] = _get_value(stop_wall, "strike") - stop_buffer
+        else:
+            order["stopLoss"] = _get_value(stop_wall, "strike") + stop_buffer
+
+    else:
+        order["gexReason"] = "Unknown alert side for GEX order"
+        _add_gex_order_check(order, False, "Unknown alert side", alert_side)
+        return order
+
+    _validate_gex_order_sides(order, alert_side, spot)
+    return order
 
 
 def _calculate_risk_reward(classification: Any, market_context: dict) -> tuple:
@@ -107,6 +250,7 @@ def validate_ultra_short(
     market_context = market_context if isinstance(market_context, dict) else {}
     option_market = market_context.get("option") or {}
     indicators = market_context.get("indicators") or {}
+    gex_context = market_context.get("gex_context") or market_context.get("gex")
 
     checks = []
 
@@ -172,6 +316,37 @@ def validate_ultra_short(
         risk_reward
     )
 
+    order_proposal = None
+    if gex_context is not None:
+        underlying = market_context.get("underlying") or {}
+        option = normalized.get("option") or {}
+        order_proposal = build_ultra_short_gex_order(
+            option.get("type"),
+            underlying.get("price"),
+            gex_context
+        )
+        gex_summary = {
+            "nearest_wall_above": _wall_to_dict(_get_value(gex_context, "nearest_wall_above")),
+            "nearest_wall_below": _wall_to_dict(_get_value(gex_context, "nearest_wall_below")),
+            "strongest_wall_above": _wall_to_dict(_get_value(gex_context, "strongest_wall_above")),
+            "strongest_wall_below": _wall_to_dict(_get_value(gex_context, "strongest_wall_below")),
+            "strongest_call_wall": _wall_to_dict(_get_value(gex_context, "strongest_call_wall")),
+            "strongest_put_wall": _wall_to_dict(_get_value(gex_context, "strongest_put_wall")),
+            "targetMode": order_proposal.get("targetMode"),
+            "trailing.enabled": order_proposal.get("trailing", {}).get("enabled"),
+            "trailing.activationLevel": order_proposal.get("trailing", {}).get("activationLevel"),
+            "stopLoss": order_proposal.get("stopLoss"),
+            "takeProfit": order_proposal.get("takeProfit"),
+            "gexReason": order_proposal.get("gexReason")
+        }
+        _add_check(
+            checks,
+            "gex_order",
+            True,
+            "GEX order context attached",
+            gex_summary
+        )
+
     failed_checks = [check for check in checks if not check["passed"]]
     decision = "VALID" if not failed_checks else "REJECT"
     reason = "Ultra short validation passed"
@@ -187,5 +362,5 @@ def validate_ultra_short(
         "checks": checks,
         "failedChecks": failed_checks,
         "riskReward": risk_reward,
-        "orderProposal": None
+        "orderProposal": order_proposal
     }
