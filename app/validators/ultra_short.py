@@ -16,12 +16,6 @@ def _safe_float(value) -> Optional[float]:
     return result
 
 
-def _get_classification_value(classification: Any, key: str):
-    if isinstance(classification, dict):
-        return classification.get(key)
-    return getattr(classification, key, None)
-
-
 def _add_check(checks: list, name: str, passed: bool, reason: str, value: Any):
     check = {
         "name": name,
@@ -185,60 +179,58 @@ def build_ultra_short_gex_order(alert_side, spot, gex_context):
     return order
 
 
-def _calculate_risk_reward(classification: Any, market_context: dict) -> tuple:
-    underlying = market_context.get("underlying") or {}
-    indicators = market_context.get("indicators") or {}
-
-    entry = _safe_float(underlying.get("price"))
-    support = _safe_float(indicators.get("pseudo_gex_support"))
-    resistance = _safe_float(indicators.get("pseudo_gex_resistance"))
-    sentiment = _get_classification_value(classification, "sentiment")
-
+def _calculate_risk_reward(alert_side, order_proposal: Optional[dict] = None) -> tuple:
     risk_reward = _empty_risk_reward()
-    risk_reward["entry"] = entry
+    risk_reward["source"] = "gex_order"
 
-    if sentiment == "bullish":
-        risk_reward["stop"] = support
-        risk_reward["target"] = resistance
+    if order_proposal is None:
+        return risk_reward, False, "Missing GEX order proposal"
 
-        if support is None:
-            return risk_reward, False, "Missing pseudo-GEX support from Open Interest"
-        if entry is None:
-            return risk_reward, False, "Missing underlying entry price"
-        if resistance is None:
-            return risk_reward, True, "No pseudo-GEX resistance above"
+    entry = _safe_float(order_proposal.get("entry"))
+    stop = _safe_float(order_proposal.get("stopLoss"))
+    target = _safe_float(order_proposal.get("takeProfit"))
+    target_source = "take_profit"
 
-        risk = entry - support
-        reward = resistance - entry
+    if target is None:
+        trailing = order_proposal.get("trailing") or {}
+        if trailing.get("enabled") is True:
+            target = _safe_float(trailing.get("activationLevel"))
+            target_source = "trailing_activation"
 
-    elif sentiment == "bearish":
-        risk_reward["stop"] = resistance
-        risk_reward["target"] = support
+    risk_reward.update({
+        "entry": entry,
+        "stop": stop,
+        "target": target,
+        "target_source": target_source
+    })
 
-        if resistance is None:
-            return risk_reward, False, "Missing pseudo-GEX resistance from Open Interest"
-        if entry is None:
-            return risk_reward, False, "Missing underlying entry price"
-        if support is None:
-            return risk_reward, True, "No pseudo-GEX support below"
+    if entry is None or stop is None or target is None:
+        return (
+            risk_reward,
+            False,
+            "Cannot calculate GEX risk/reward because entry, stopLoss or takeProfit/trailing activation is missing"
+        )
 
-        risk = resistance - entry
-        reward = entry - support
-
+    if alert_side == "CALL":
+        risk = entry - stop
+        reward = target - entry
+    elif alert_side == "PUT":
+        risk = stop - entry
+        reward = entry - target
     else:
-        return risk_reward, False, "Neutral or unknown sentiment"
+        return risk_reward, False, "Unknown alert side for GEX risk/reward"
 
     risk_reward["risk"] = risk
     risk_reward["reward"] = reward
 
     if risk <= 0 or reward <= 0:
-        return risk_reward, False, "Invalid risk/reward geometry"
+        return risk_reward, False, "Invalid GEX risk/reward geometry"
 
     risk_reward["risk_reward"] = reward / risk
     if risk_reward["risk_reward"] > 2:
-        return risk_reward, True, "Risk/reward is acceptable"
+        return risk_reward, True, "GEX risk/reward is acceptable"
 
-    return risk_reward, False, "Risk/reward must be greater than 2"
+    return risk_reward, False, "GEX risk/reward is below minimum"
 
 
 def validate_ultra_short(
@@ -304,18 +296,6 @@ def validate_ultra_short(
         }
     )
 
-    risk_reward, risk_reward_passed, risk_reward_reason = _calculate_risk_reward(
-        classification,
-        market_context
-    )
-    _add_check(
-        checks,
-        "risk_reward",
-        risk_reward_passed,
-        risk_reward_reason,
-        risk_reward
-    )
-
     order_proposal = None
     if gex_context is not None:
         underlying = market_context.get("underlying") or {}
@@ -346,6 +326,18 @@ def validate_ultra_short(
             "GEX order context attached",
             gex_summary
         )
+
+    risk_reward, risk_reward_passed, risk_reward_reason = _calculate_risk_reward(
+        (normalized.get("option") or {}).get("type"),
+        order_proposal
+    )
+    _add_check(
+        checks,
+        "risk_reward",
+        risk_reward_passed,
+        risk_reward_reason,
+        risk_reward
+    )
 
     failed_checks = [check for check in checks if not check["passed"]]
     decision = "VALID" if not failed_checks else "REJECT"
