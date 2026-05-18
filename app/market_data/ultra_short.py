@@ -28,12 +28,21 @@ def _debug_option_chain(underlying: Optional[str], message: str, data=None) -> N
 def _empty_market_context() -> Dict[str, Any]:
     return {
         "option": {
+            "symbol": None,
+            "underlying": None,
+            "type": None,
+            "strike": None,
+            "expiration": None,
+            "dte": None,
             "ask": None,
             "bid": None,
+            "last": None,
             "volume": None,
-            "openInterest": None
+            "openInterest": None,
+            "gamma": None
         },
         "underlying": {
+            "symbol": None,
             "price": None
         },
         "optionChain": []
@@ -75,6 +84,18 @@ def _get_option_dte(normalized: dict) -> Optional[int]:
         return max((expiration_date - date.today()).days, 0)
     except (TypeError, ValueError):
         return None
+
+
+def _get_option_metadata(normalized: dict) -> Dict[str, Any]:
+    option = normalized.get("option") or {}
+    return {
+        "symbol": option.get("symbol"),
+        "underlying": option.get("underlying"),
+        "type": option.get("type"),
+        "strike": _safe_float(option.get("strike")),
+        "expiration": option.get("expiration"),
+        "dte": _get_option_dte(normalized)
+    }
 
 
 def _get_option_gamma(ticker) -> Optional[float]:
@@ -240,11 +261,11 @@ def _get_option_chain_oi_proxy(
         "rawStrikeCount": len(strikes)
     })
 
+    lower_bound = current_price * (1 - GEX_ULTRA_SHORT_RANGE_PCT)
+    upper_bound = current_price * (1 + GEX_ULTRA_SHORT_RANGE_PCT)
     strikes_in_range = [
         strike for strike in strikes
-        if current_price * (1 - GEX_ULTRA_SHORT_RANGE_PCT)
-        <= strike
-        <= current_price * (1 + GEX_ULTRA_SHORT_RANGE_PCT)
+        if lower_bound <= strike <= upper_bound
     ]
 
     _debug_option_chain(underlying, "after strike filter", {
@@ -253,14 +274,47 @@ def _get_option_chain_oi_proxy(
         "strikes": sorted(strikes_in_range)[:40]
     })
 
-    # GEX needs both calls and puts on both sides of spot. A put above spot or
-    # a call below spot can still be the nearest relevant wall.
+    alert_type = option.get("type")
+    alert_strike = _safe_float(target_strike)
+    call_strikes = {
+        strike for strike in strikes_in_range
+        if strike > current_price
+    }
+    put_strikes = {
+        strike for strike in strikes_in_range
+        if strike < current_price
+    }
+
+    if alert_strike is not None:
+        if alert_type == "CALL":
+            call_strikes.add(alert_strike)
+        if alert_type == "PUT":
+            put_strikes.add(alert_strike)
+
+    _debug_option_chain(underlying, "trade-oriented strike sets", {
+        "alertType": alert_type,
+        "alertStrike": alert_strike,
+        "callStrikeCount": len(call_strikes),
+        "putStrikeCount": len(put_strikes),
+        "callStrikes": sorted(call_strikes)[:40],
+        "putStrikes": sorted(put_strikes)[:40]
+    })
+
+    # Ultra-short market data is trade-oriented: target-side calls above spot,
+    # protection-side puts below spot, and the alerted contract even when it is
+    # outside the default range.
     rows = []
-    for option_type, right, strikes in (
-        ("CALL", "C", sorted(strikes_in_range)),
-        ("PUT", "P", sorted(strikes_in_range)),
+    seen_contracts = set()
+    for option_type, right, selected_strikes in (
+        ("CALL", "C", sorted(call_strikes)),
+        ("PUT", "P", sorted(put_strikes)),
     ):
-        for strike in strikes:
+        for strike in selected_strikes:
+            contract_key = (option_type, _safe_float(strike))
+            if contract_key in seen_contracts:
+                continue
+            seen_contracts.add(contract_key)
+
             contract = Option(
                 underlying,
                 expiration,
@@ -292,7 +346,12 @@ def _get_option_chain_oi_proxy(
                 "volume": _safe_float(ticker.volume),
                 "bid": _safe_float(ticker.bid),
                 "ask": _safe_float(ticker.ask),
-                "last": _get_option_last(ticker)
+                "last": _get_option_last(ticker),
+                "is_alert_contract": (
+                    option_type == alert_type
+                    and alert_strike is not None
+                    and _safe_float(strike) == alert_strike
+                )
             })
 
             ib.cancelMktData(contract)
@@ -366,8 +425,12 @@ def get_ultra_short_market_context(normalized: dict) -> Dict[str, Any]:
                 return context
 
             current_price = _get_underlying_price(ib, underlying)
+            context["underlying"]["symbol"] = underlying
             context["underlying"]["price"] = current_price
-            context["option"] = _get_option_quote(ib, normalized)
+            context["option"] = {
+                **_get_option_metadata(normalized),
+                **_get_option_quote(ib, normalized)
+            }
             context["optionChain"] = _get_option_chain_oi_proxy(
                 ib,
                 normalized,
