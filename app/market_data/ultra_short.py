@@ -8,8 +8,17 @@ from app.market_data.ibkr import ibkr_session
 IB_EXCHANGE = "SMART"
 IB_CURRENCY = "USD"
 IB_QUOTE_WAIT_SECONDS = 1.5
-GEX_ULTRA_SHORT_RANGE_PCT = 0.05
 DEBUG_OPTION_CHAIN = os.getenv("DEBUG_OPTION_CHAIN", "").lower() in ("1", "true", "yes")
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+GEX_ULTRA_SHORT_RANGE_PCT = _env_float("GEX_ULTRA_SHORT_RANGE_PCT", 0.05)
 
 
 def _should_debug_option_chain(underlying: Optional[str]) -> bool:
@@ -467,22 +476,6 @@ def _attach_gex_context(
     )
     context["gex_context"] = gex_context.model_dump()
     debug_data["gexBuilt"] = True
-    debug_data["nearestWallAbove"] = (
-        {
-            "strike": gex_context.nearest_wall_above.strike,
-            "option_type": gex_context.nearest_wall_above.option_type,
-            "sign": gex_context.nearest_wall_above.sign
-        }
-        if gex_context.nearest_wall_above else None
-    )
-    debug_data["nearestWallBelow"] = (
-        {
-            "strike": gex_context.nearest_wall_below.strike,
-            "option_type": gex_context.nearest_wall_below.option_type,
-            "sign": gex_context.nearest_wall_below.sign
-        }
-        if gex_context.nearest_wall_below else None
-    )
     _debug_option_chain(underlying, "gex context", debug_data)
 
 

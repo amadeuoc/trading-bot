@@ -279,22 +279,6 @@ def _has_strength(wall: GexWallContext, min_hybrid_gex=None) -> bool:
     return True
 
 
-def find_nearest_wall_above(walls, min_hybrid_gex=None):
-    candidates = [
-        wall for wall in walls
-        if wall.position == "above" and _has_strength(wall, min_hybrid_gex)
-    ]
-    return sorted(candidates, key=lambda wall: wall.strike)[0] if candidates else None
-
-
-def find_nearest_wall_below(walls, min_hybrid_gex=None):
-    candidates = [
-        wall for wall in walls
-        if wall.position == "below" and _has_strength(wall, min_hybrid_gex)
-    ]
-    return sorted(candidates, key=lambda wall: wall.strike, reverse=True)[0] if candidates else None
-
-
 def _strongest(walls):
     candidates = [wall for wall in walls if wall.hybrid_strength is not None]
     return max(candidates, key=lambda wall: wall.hybrid_strength) if candidates else None
@@ -338,8 +322,6 @@ def build_gex_context(
         range_pct=range_pct,
         points=points,
         walls=walls,
-        nearest_wall_above=find_nearest_wall_above(walls),
-        nearest_wall_below=find_nearest_wall_below(walls),
         strongest_wall_above=find_strongest_wall_above(walls),
         strongest_wall_below=find_strongest_wall_below(walls),
         strongest_call_wall=find_strongest_call_wall(walls),

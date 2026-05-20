@@ -87,8 +87,6 @@ class GexContext(BaseModel):
     range_pct: Optional[float] = None
     points: List[OptionGexPoint] = Field(default_factory=list)
     walls: List[GexWallContext] = Field(default_factory=list)
-    nearest_wall_above: Optional[GexWallContext] = None
-    nearest_wall_below: Optional[GexWallContext] = None
     strongest_wall_above: Optional[GexWallContext] = None
     strongest_wall_below: Optional[GexWallContext] = None
     strongest_call_wall: Optional[GexWallContext] = None
