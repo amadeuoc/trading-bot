@@ -107,6 +107,22 @@ def _get_option_gamma(ticker) -> Optional[float]:
     return None
 
 
+def _wait_for_option_gamma(
+    ib,
+    ticker,
+    max_wait_seconds=3.0,
+    step_seconds=0.25
+) -> Optional[float]:
+    elapsed = 0
+    while elapsed < max_wait_seconds:
+        gamma = _get_option_gamma(ticker)
+        if gamma is not None:
+            return gamma
+        ib.sleep(step_seconds)
+        elapsed += step_seconds
+    return _get_option_gamma(ticker)
+
+
 def _get_option_last(ticker) -> Optional[float]:
     last = _safe_float(getattr(ticker, "last", None))
     if last is not None and last > 0:
@@ -117,6 +133,42 @@ def _get_option_last(ticker) -> Optional[float]:
         return market_price
 
     return None
+
+
+def _has_option_market_data(ticker, open_interest=None) -> bool:
+    return any(
+        value is not None
+        for value in (
+            _safe_float(getattr(ticker, "bid", None)),
+            _safe_float(getattr(ticker, "ask", None)),
+            _get_option_last(ticker),
+            _safe_float(getattr(ticker, "volume", None)),
+            _safe_float(open_interest),
+        )
+    )
+
+
+def _debug_missing_gamma(
+    underlying,
+    expiration,
+    option_type,
+    strike,
+    ticker,
+    open_interest=None
+) -> None:
+    if not _should_debug_option_chain(underlying):
+        return
+    if not _has_option_market_data(ticker, open_interest=open_interest):
+        return
+
+    print(
+        "[OPTION_CHAIN] missing gamma for",
+        underlying,
+        expiration,
+        option_type,
+        strike,
+        "with bid/ask/volume/OI available"
+    )
 
 
 def _get_underlying_price(ib, ticker_symbol: str) -> Optional[float]:
@@ -175,8 +227,17 @@ def _get_option_quote(ib, normalized: dict) -> Dict[str, Optional[float]]:
         "last": _get_option_last(ticker),
         "volume": _safe_float(ticker.volume),
         "openInterest": open_interest,
-        "gamma": _get_option_gamma(ticker)
+        "gamma": _wait_for_option_gamma(ib, ticker)
     }
+    if quote["gamma"] is None:
+        _debug_missing_gamma(
+            underlying,
+            option.get("expiration") or expiration,
+            option.get("type"),
+            option.get("strike"),
+            ticker,
+            open_interest=open_interest
+        )
 
     ib.cancelMktData(contract)
     return quote
@@ -335,13 +396,23 @@ def _get_option_chain_oi_proxy(
                 if option_type == "CALL"
                 else _safe_float(getattr(ticker, "putOpenInterest", None))
             )
+            gamma = _wait_for_option_gamma(ib, ticker)
+            if gamma is None:
+                _debug_missing_gamma(
+                    underlying,
+                    display_expiration,
+                    option_type,
+                    strike,
+                    ticker,
+                    open_interest=open_interest
+                )
 
             rows.append({
                 "expiry": display_expiration,
                 "dte": dte,
                 "strike": _safe_float(strike),
                 "option_type": option_type,
-                "gamma": _get_option_gamma(ticker),
+                "gamma": gamma,
                 "open_interest": open_interest,
                 "volume": _safe_float(ticker.volume),
                 "bid": _safe_float(ticker.bid),

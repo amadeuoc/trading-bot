@@ -56,6 +56,33 @@ def _wall_to_dict(wall):
     return wall
 
 
+def _get_walls(gex_context):
+    walls = _get_value(gex_context, "walls") or []
+    return walls if isinstance(walls, list) else []
+
+
+def _wall_strength(wall):
+    return _safe_float(_get_value(wall, "hybrid_strength")) or 0
+
+
+def _filter_trade_walls(gex_context, option_type, position):
+    return [
+        wall for wall in _get_walls(gex_context)
+        if _get_value(wall, "option_type") == option_type
+        and _get_value(wall, "position") == position
+        and _wall_strength(wall) > 0
+    ]
+
+
+def _select_nearest_trade_wall(gex_context, option_type, position):
+    walls = _filter_trade_walls(gex_context, option_type, position)
+    if position == "above":
+        return sorted(walls, key=lambda wall: _get_value(wall, "strike"))[0] if walls else None
+    if position == "below":
+        return sorted(walls, key=lambda wall: _get_value(wall, "strike"), reverse=True)[0] if walls else None
+    return None
+
+
 def _empty_gex_trade_plan(spot=None, reason="No GEX context available"):
     return {
         "entry": spot,
@@ -111,14 +138,12 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
 
     target_buffer = compute_target_buffer(spot)
     stop_buffer = compute_stop_buffer(spot)
-    nearest_above = _get_value(gex_context, "nearest_wall_above")
-    nearest_below = _get_value(gex_context, "nearest_wall_below")
 
     trade_plan = _empty_gex_trade_plan(spot, "GEX order built from nearest walls")
 
     if alert_side == "CALL":
-        target_wall = nearest_above
-        stop_wall = nearest_below
+        target_wall = _select_nearest_trade_wall(gex_context, "CALL", "above")
+        stop_wall = _select_nearest_trade_wall(gex_context, "PUT", "below")
         trade_plan["targetWall"] = _wall_to_dict(target_wall)
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
@@ -143,8 +168,8 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
             trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
 
     elif alert_side == "PUT":
-        target_wall = nearest_below
-        stop_wall = nearest_above
+        target_wall = _select_nearest_trade_wall(gex_context, "PUT", "below")
+        stop_wall = _select_nearest_trade_wall(gex_context, "CALL", "above")
         trade_plan["targetWall"] = _wall_to_dict(target_wall)
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
@@ -328,8 +353,8 @@ def validate_ultra_short(
         )
         order_proposal = build_ultra_short_gex_order_from_trade_plan(trade_plan)
         gex_summary = {
-            "nearest_wall_above": _wall_to_dict(_get_value(gex_context, "nearest_wall_above")),
-            "nearest_wall_below": _wall_to_dict(_get_value(gex_context, "nearest_wall_below")),
+            "targetWall": order_proposal.get("gexWalls", {}).get("targetWall"),
+            "stopWall": order_proposal.get("gexWalls", {}).get("stopWall"),
             "strongest_wall_above": _wall_to_dict(_get_value(gex_context, "strongest_wall_above")),
             "strongest_wall_below": _wall_to_dict(_get_value(gex_context, "strongest_wall_below")),
             "strongest_call_wall": _wall_to_dict(_get_value(gex_context, "strongest_call_wall")),

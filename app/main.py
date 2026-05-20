@@ -36,6 +36,5 @@ def analyze(req: AnalyzeRequest):
 
     return {
         "status": "ok",
-        **analysis,
-        "normalized": normalized
+        **analysis
     }
