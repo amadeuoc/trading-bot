@@ -59,10 +59,15 @@ class OptionGexPoint(BaseModel):
 
 class GexWallContext(BaseModel):
     strike: float
-    option_type: Literal["CALL", "PUT"]
+    dominant_side: Literal["CALL", "PUT", "mixed", "unknown"] = "unknown"
     position: Literal["above", "below", "at_spot"]
     distance_from_spot: Optional[float] = None
     distance_pct_from_spot: Optional[float] = None
+    call_hybrid_gex: Optional[float] = None
+    put_hybrid_gex: Optional[float] = None
+    net_hybrid_gex: Optional[float] = None
+    call_strength: Optional[float] = None
+    put_strength: Optional[float] = None
     oi_gex: Optional[float] = None
     volume_gex: Optional[float] = None
     hybrid_gex: Optional[float] = None
@@ -87,8 +92,14 @@ class GexContext(BaseModel):
     range_pct: Optional[float] = None
     points: List[OptionGexPoint] = Field(default_factory=list)
     walls: List[GexWallContext] = Field(default_factory=list)
+    nearest_above: Optional[GexWallContext] = None
+    nearest_below: Optional[GexWallContext] = None
     strongest_wall_above: Optional[GexWallContext] = None
     strongest_wall_below: Optional[GexWallContext] = None
+    nearest_trade_wall_above: Optional[GexWallContext] = None
+    nearest_trade_wall_below: Optional[GexWallContext] = None
+    strongest_trade_wall_above: Optional[GexWallContext] = None
+    strongest_trade_wall_below: Optional[GexWallContext] = None
     strongest_call_wall: Optional[GexWallContext] = None
     strongest_put_wall: Optional[GexWallContext] = None
 

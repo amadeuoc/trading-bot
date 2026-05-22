@@ -169,33 +169,22 @@ def _position_for_strike(strike: float, spot: float) -> Literal["above", "below"
     return "at_spot"
 
 
-def compute_wall_sign(
-    points: List[OptionGexPoint],
-    strike: float,
-    option_type: str
-) -> Tuple[Literal["positive", "negative", "mixed", "unknown"], Optional[float], Optional[float]]:
-    flows = [
-        point.signed_flow_gex
-        for point in points
-        if point.strike == strike
-        and point.option_type == option_type
-        and point.signed_flow_gex is not None
-    ]
+def compute_wall_sign_from_net_gex(
+    net_hybrid_gex,
+    hybrid_strength
+) -> Tuple[Literal["positive", "negative", "mixed", "unknown"], Optional[float]]:
+    net_hybrid_gex = _safe_float(net_hybrid_gex)
+    hybrid_strength = _safe_float(hybrid_strength)
 
-    if not flows:
-        return "unknown", None, None
+    if net_hybrid_gex is None or hybrid_strength is None or hybrid_strength <= 0:
+        return "unknown", None
 
-    signed_total = sum(flows)
-    abs_total = sum(abs(flow) for flow in flows)
-    if abs_total == 0:
-        return "unknown", None, signed_total
-
-    score = signed_total / abs_total
+    score = net_hybrid_gex / hybrid_strength
     if score >= 0.30:
-        return "positive", score, signed_total
+        return "positive", score
     if score <= -0.30:
-        return "negative", score, signed_total
-    return "mixed", score, signed_total
+        return "negative", score
+    return "mixed", score
 
 
 def determine_wall_behavior(position, sign):
@@ -226,9 +215,9 @@ def build_gex_walls(
     if spot is None or spot <= 0:
         return []
 
-    groups: Dict[Tuple[str, float], List[OptionGexPoint]] = {}
+    groups: Dict[float, List[OptionGexPoint]] = {}
     for point in points or []:
-        if point.strike is None or point.option_type not in ("CALL", "PUT"):
+        if point.strike is None:
             continue
 
         if range_pct is not None:
@@ -236,28 +225,64 @@ def build_gex_walls(
             if distance_pct > range_pct:
                 continue
 
-        groups.setdefault((point.option_type, point.strike), []).append(point)
+        groups.setdefault(point.strike, []).append(point)
 
     walls = []
-    for (option_type, strike), group in groups.items():
+    for strike, group in groups.items():
+        call_hybrid_gex = sum(
+            _point_value(point, "hybrid_gex")
+            for point in group
+            if point.option_type == "CALL"
+        )
+        put_hybrid_gex = sum(
+            _point_value(point, "hybrid_gex")
+            for point in group
+            if point.option_type == "PUT"
+        )
+        net_hybrid_gex = call_hybrid_gex - put_hybrid_gex
+        call_strength = abs(call_hybrid_gex)
+        put_strength = abs(put_hybrid_gex)
+        hybrid_strength = call_strength + put_strength
+
+        if call_strength > put_strength:
+            dominant_side = "CALL"
+        elif put_strength > call_strength:
+            dominant_side = "PUT"
+        elif hybrid_strength > 0:
+            dominant_side = "mixed"
+        else:
+            dominant_side = "unknown"
+
         oi_gex = sum(_point_value(point, "oi_gex") for point in group)
         volume_gex = sum(_point_value(point, "volume_gex") for point in group)
-        hybrid_gex = sum(_point_value(point, "hybrid_gex") for point in group)
-        hybrid_strength = abs(hybrid_gex)
+        hybrid_gex = net_hybrid_gex
 
         if min_hybrid_gex is not None and hybrid_strength < min_hybrid_gex:
             continue
 
         position = _position_for_strike(strike, spot)
-        sign, sign_score, signed_total = compute_wall_sign(points, strike, option_type)
+        sign, sign_score = compute_wall_sign_from_net_gex(
+            net_hybrid_gex,
+            hybrid_strength
+        )
+        signed_total = sum(
+            _point_value(point, "signed_flow_gex")
+            for point in group
+            if point.signed_flow_gex is not None
+        )
         behavior = determine_wall_behavior(position, sign)
 
         walls.append(GexWallContext(
             strike=strike,
-            option_type=option_type,
+            dominant_side=dominant_side,
             position=position,
             distance_from_spot=strike - spot,
             distance_pct_from_spot=abs(strike - spot) / spot * 100,
+            call_hybrid_gex=call_hybrid_gex,
+            put_hybrid_gex=put_hybrid_gex,
+            net_hybrid_gex=net_hybrid_gex,
+            call_strength=call_strength,
+            put_strength=put_strength,
             oi_gex=oi_gex,
             volume_gex=volume_gex,
             hybrid_gex=hybrid_gex,
@@ -271,17 +296,47 @@ def build_gex_walls(
     return walls
 
 
-def _has_strength(wall: GexWallContext, min_hybrid_gex=None) -> bool:
-    if wall.hybrid_strength is None or wall.hybrid_strength <= 0:
-        return False
-    if min_hybrid_gex is not None and wall.hybrid_strength < min_hybrid_gex:
-        return False
-    return True
+def _wall_strength(wall: GexWallContext) -> float:
+    if wall.hybrid_strength is not None:
+        return wall.hybrid_strength
+    if wall.hybrid_gex is not None:
+        return abs(wall.hybrid_gex)
+    return 0
+
+
+def _significant_walls(walls):
+    return [wall for wall in walls if _wall_strength(wall) > 0]
+
+
+def _trade_walls(walls):
+    return [
+        wall for wall in _significant_walls(walls)
+        if wall.behavior in ("support", "resistance")
+    ]
+
+
+def _nearest(walls, position):
+    candidates = [
+        wall for wall in _significant_walls(walls)
+        if wall.position == position
+    ]
+    return min(
+        candidates,
+        key=lambda wall: abs(wall.distance_from_spot or 0)
+    ) if candidates else None
 
 
 def _strongest(walls):
-    candidates = [wall for wall in walls if wall.hybrid_strength is not None]
-    return max(candidates, key=lambda wall: wall.hybrid_strength) if candidates else None
+    candidates = _significant_walls(walls)
+    return max(candidates, key=_wall_strength) if candidates else None
+
+
+def find_nearest_above(walls):
+    return _nearest(walls, "above")
+
+
+def find_nearest_below(walls):
+    return _nearest(walls, "below")
 
 
 def find_strongest_wall_above(walls):
@@ -292,12 +347,34 @@ def find_strongest_wall_below(walls):
     return _strongest([wall for wall in walls if wall.position == "below"])
 
 
+def find_nearest_trade_wall_above(walls):
+    return _nearest(_trade_walls(walls), "above")
+
+
+def find_nearest_trade_wall_below(walls):
+    return _nearest(_trade_walls(walls), "below")
+
+
+def find_strongest_trade_wall_above(walls):
+    return _strongest([
+        wall for wall in _trade_walls(walls)
+        if wall.position == "above"
+    ])
+
+
+def find_strongest_trade_wall_below(walls):
+    return _strongest([
+        wall for wall in _trade_walls(walls)
+        if wall.position == "below"
+    ])
+
+
 def find_strongest_call_wall(walls):
-    return _strongest([wall for wall in walls if wall.option_type == "CALL"])
+    return _strongest([wall for wall in walls if wall.dominant_side == "CALL"])
 
 
 def find_strongest_put_wall(walls):
-    return _strongest([wall for wall in walls if wall.option_type == "PUT"])
+    return _strongest([wall for wall in walls if wall.dominant_side == "PUT"])
 
 
 def build_gex_context(
@@ -322,8 +399,14 @@ def build_gex_context(
         range_pct=range_pct,
         points=points,
         walls=walls,
+        nearest_above=find_nearest_above(walls),
+        nearest_below=find_nearest_below(walls),
         strongest_wall_above=find_strongest_wall_above(walls),
         strongest_wall_below=find_strongest_wall_below(walls),
+        nearest_trade_wall_above=find_nearest_trade_wall_above(walls),
+        nearest_trade_wall_below=find_nearest_trade_wall_below(walls),
+        strongest_trade_wall_above=find_strongest_trade_wall_above(walls),
+        strongest_trade_wall_below=find_strongest_trade_wall_below(walls),
         strongest_call_wall=find_strongest_call_wall(walls),
         strongest_put_wall=find_strongest_put_wall(walls)
     )

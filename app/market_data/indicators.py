@@ -78,7 +78,7 @@ def _get_liquidity(market_context: dict) -> dict:
         "bid": _safe_float(option.get("bid")),
         "ask": _safe_float(option.get("ask")),
         "volume": _safe_float(option.get("volume")),
-        "openInterest": _safe_float(option.get("openInterest"))
+        "open_interest": _safe_float(option.get("open_interest"))
     }
 
 

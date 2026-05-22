@@ -4,9 +4,6 @@ from typing import Any, Optional
 from app.market_data.gex import compute_stop_buffer, compute_target_buffer
 
 
-MIN_STOP_WALL_DISTANCE_PCT = 0.10
-
-
 def _safe_float(value) -> Optional[float]:
     try:
         result = float(value)
@@ -68,74 +65,17 @@ def _wall_strength(wall):
     return _safe_float(_get_value(wall, "hybrid_strength")) or 0
 
 
-def _wall_distance_pct(wall):
-    return _safe_float(_get_value(wall, "distance_pct_from_spot")) or 0
-
-
-def _filter_trade_walls(gex_context, option_type, position):
+def _filter_trade_walls(gex_context, position, behavior):
     return [
         wall for wall in _get_walls(gex_context)
-        if _get_value(wall, "option_type") == option_type
-        and _get_value(wall, "position") == position
+        if _get_value(wall, "position") == position
+        and _get_value(wall, "behavior") == behavior
         and _wall_strength(wall) > 0
     ]
 
 
-def _select_strongest_trade_wall(gex_context, option_type, position):
-    walls = _filter_trade_walls(gex_context, option_type, position)
-    return max(walls, key=_wall_strength) if walls else None
-
-
-def _filter_usable_stop_walls(
-    gex_context,
-    option_type,
-    position,
-    preferred_behavior,
-    avoided_behavior
-):
-    candidates = [
-        wall for wall in _filter_trade_walls(gex_context, option_type, position)
-        if _wall_distance_pct(wall) >= MIN_STOP_WALL_DISTANCE_PCT
-    ]
-
-    preferred = [
-        wall for wall in candidates
-        if _get_value(wall, "behavior") == preferred_behavior
-    ]
-    if preferred:
-        return preferred
-
-    unknown = [
-        wall for wall in candidates
-        if _get_value(wall, "behavior") == "unknown"
-    ]
-    if unknown:
-        return unknown
-
-    non_avoided = [
-        wall for wall in candidates
-        if _get_value(wall, "behavior") != avoided_behavior
-    ]
-    if non_avoided:
-        return non_avoided
-
-    return candidates
-
-
-def _select_strongest_usable_stop_wall(
-    gex_context,
-    option_type,
-    position,
-    preferred_behavior,
-    avoided_behavior
-):
-    walls = _filter_usable_stop_walls(
-        gex_context,
-        option_type,
-        position,
-        preferred_behavior,
-        avoided_behavior
-    )
+def _select_strongest_trade_wall(gex_context, position, behavior):
+    walls = _filter_trade_walls(gex_context, position, behavior)
     return max(walls, key=_wall_strength) if walls else None
 
 
@@ -198,19 +138,13 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
     trade_plan = _empty_gex_trade_plan(spot, "GEX order built from strongest trade walls")
 
     if alert_side == "CALL":
-        target_wall = _select_strongest_trade_wall(gex_context, "CALL", "above")
-        stop_wall = _select_strongest_usable_stop_wall(
-            gex_context,
-            "PUT",
-            "below",
-            preferred_behavior="support",
-            avoided_behavior="breakdown_accelerator"
-        )
+        target_wall = _select_strongest_trade_wall(gex_context, "above", "resistance")
+        stop_wall = _select_strongest_trade_wall(gex_context, "below", "support")
         trade_plan["targetWall"] = _wall_to_dict(target_wall)
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
         if target_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No CALL wall above for CALL target")
+            _add_gex_trade_plan_check(trade_plan, True, "No resistance above for CALL target")
         elif _get_value(target_wall, "sign") == "negative":
             trade_plan["targetMode"] = "none_trailing_after_wall"
             trade_plan["trailing"] = {
@@ -223,26 +157,20 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
             trade_plan["target"] = _get_value(target_wall, "strike") - target_buffer
 
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No PUT wall below for CALL stop")
+            _add_gex_trade_plan_check(trade_plan, True, "No support below for CALL stop")
         elif _get_value(stop_wall, "sign") == "negative":
             trade_plan["stop"] = _get_value(stop_wall, "strike") + stop_buffer
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
 
     elif alert_side == "PUT":
-        target_wall = _select_strongest_trade_wall(gex_context, "PUT", "below")
-        stop_wall = _select_strongest_usable_stop_wall(
-            gex_context,
-            "CALL",
-            "above",
-            preferred_behavior="resistance",
-            avoided_behavior="breakout_accelerator"
-        )
+        target_wall = _select_strongest_trade_wall(gex_context, "below", "support")
+        stop_wall = _select_strongest_trade_wall(gex_context, "above", "resistance")
         trade_plan["targetWall"] = _wall_to_dict(target_wall)
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
         if target_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No PUT wall below for PUT target")
+            _add_gex_trade_plan_check(trade_plan, True, "No support below for PUT target")
         elif _get_value(target_wall, "sign") == "negative":
             trade_plan["targetMode"] = "none_trailing_after_wall"
             trade_plan["trailing"] = {
@@ -255,7 +183,7 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
             trade_plan["target"] = _get_value(target_wall, "strike") + target_buffer
 
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No CALL wall above for PUT stop")
+            _add_gex_trade_plan_check(trade_plan, True, "No resistance above for PUT stop")
         elif _get_value(stop_wall, "sign") == "negative":
             trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
         else:

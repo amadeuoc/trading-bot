@@ -114,12 +114,24 @@ def _camelize_known(value: Any):
         "volume_gex": "volumeGex",
         "hybrid_gex": "hybridGex",
         "hybrid_strength": "hybridStrength",
+        "call_hybrid_gex": "callHybridGex",
+        "put_hybrid_gex": "putHybridGex",
+        "net_hybrid_gex": "netHybridGex",
+        "call_strength": "callStrength",
+        "put_strength": "putStrength",
+        "dominant_side": "dominantSide",
         "signed_flow_gex": "signedFlowGex",
         "signed_flow_gex_total": "signedFlowGexTotal",
         "sign_score": "signScore",
         "dte_max": "dteMax",
+        "nearest_above": "nearestAbove",
+        "nearest_below": "nearestBelow",
         "strongest_wall_above": "strongestWallAbove",
         "strongest_wall_below": "strongestWallBelow",
+        "nearest_trade_wall_above": "nearestTradeWallAbove",
+        "nearest_trade_wall_below": "nearestTradeWallBelow",
+        "strongest_trade_wall_above": "strongestTradeWallAbove",
+        "strongest_trade_wall_below": "strongestTradeWallBelow",
         "strongest_call_wall": "strongestCallWall",
         "strongest_put_wall": "strongestPutWall",
     }
@@ -184,7 +196,7 @@ def _build_market_data(market_context, classification) -> dict:
     if alert_contract:
         fill_fields = {
             "gamma": "gamma",
-            "openInterest": "open_interest",
+            "open_interest": "open_interest",
             "volume": "volume",
             "bid": "bid",
             "ask": "ask",
@@ -196,7 +208,7 @@ def _build_market_data(market_context, classification) -> dict:
 
     return {
         "source": "ibkr" if strategy == "ultra_short" else None,
-        "option": option,
+        "option": _camelize_known(option),
         "underlying": market_context.get("underlying") or {},
         "optionChain": [
             _camelize_known(row)
@@ -208,8 +220,7 @@ def _build_market_data(market_context, classification) -> dict:
 def _wall_key(wall):
     if not isinstance(wall, dict):
         return None
-    option_type = wall.get("option_type") or wall.get("type")
-    return (option_type, wall.get("strike"))
+    return wall.get("strike")
 
 
 def _summarize_wall(wall):
@@ -218,7 +229,7 @@ def _summarize_wall(wall):
 
     return {
         "strike": wall.get("strike"),
-        "type": wall.get("option_type") or wall.get("type"),
+        "dominantSide": wall.get("dominant_side") or wall.get("dominantSide"),
         "position": wall.get("position"),
         "distancePctFromSpot": wall.get("distance_pct_from_spot") or wall.get("distancePctFromSpot"),
         "hybridStrength": wall.get("hybrid_strength") or wall.get("hybridStrength"),
@@ -255,20 +266,36 @@ def _build_strike_range(gex: dict) -> dict:
     }
 
 
+def _build_selector_wall(gex: dict, key: str):
+    return _summarize_wall(gex.get(key))
+
+
+def _build_significant_levels_summary(gex: dict) -> dict:
+    return {
+        "nearestAbove": _build_selector_wall(gex, "nearest_above"),
+        "nearestBelow": _build_selector_wall(gex, "nearest_below"),
+        "strongestAbove": _build_selector_wall(gex, "strongest_wall_above"),
+        "strongestBelow": _build_selector_wall(gex, "strongest_wall_below"),
+    }
+
+
+def _build_trade_wall_selectors(gex: dict) -> dict:
+    return {
+        "nearestAbove": _build_selector_wall(gex, "nearest_trade_wall_above"),
+        "nearestBelow": _build_selector_wall(gex, "nearest_trade_wall_below"),
+        "strongestAbove": _build_selector_wall(gex, "strongest_trade_wall_above"),
+        "strongestBelow": _build_selector_wall(gex, "strongest_trade_wall_below"),
+    }
+
+
 def _build_gex_levels(gex: dict, market_context: dict, trade_walls: dict) -> list:
-    points = gex.get("points") or []
     walls = gex.get("walls") or []
     option_chain = market_context.get("optionChain") or []
 
-    wall_by_key = {
-        _wall_key(wall): wall
-        for wall in walls
-        if isinstance(wall, dict)
-    }
-    chain_by_key = {
+    alert_contract_keys = {
         _wall_key(row): row
         for row in option_chain
-        if isinstance(row, dict)
+        if isinstance(row, dict) and row.get("is_alert_contract") is True
     }
     target_key = _wall_key(trade_walls.get("targetWall"))
     stop_key = _wall_key(trade_walls.get("stopWall"))
@@ -297,10 +324,8 @@ def _build_gex_levels(gex: dict, market_context: dict, trade_walls: dict) -> lis
     )
 
     levels = []
-    for point in points:
-        key = _wall_key(point)
-        wall = wall_by_key.get(key) or {}
-        option_chain_row = chain_by_key.get(key) or {}
+    for wall in walls:
+        key = _wall_key(wall)
         order_role = None
         is_target_wall = key == target_key
         is_stop_wall = key == stop_key
@@ -310,10 +335,9 @@ def _build_gex_levels(gex: dict, market_context: dict, trade_walls: dict) -> lis
             order_role = "stop_wall"
 
         level = {
-            **point,
             **wall,
             "flags": {
-                "alertContract": bool(option_chain_row.get("is_alert_contract")),
+                "alertContract": key in alert_contract_keys,
                 "wall": key in relevant_wall_keys,
                 "targetWall": is_target_wall,
                 "stopWall": is_stop_wall,
@@ -332,13 +356,18 @@ def _build_gex_indicators(market_context: dict, strategy_validation) -> dict:
         return {}
 
     trade_walls = _build_trade_walls(strategy_validation)
+    trade_wall_selectors = _build_trade_wall_selectors(gex)
     return {
         "source": gex.get("source"),
         "spot": gex.get("spot"),
         "dteMax": gex.get("dte_max"),
         "strikeRange": _build_strike_range(gex),
+        "significantLevels": _build_significant_levels_summary(gex),
         "levels": _build_gex_levels(gex, market_context, trade_walls),
-        "tradeWalls": trade_walls,
+        "tradeWalls": {
+            **trade_wall_selectors,
+            **trade_walls,
+        },
     }
 
 
@@ -350,7 +379,7 @@ def _build_indicators(market_context, strategy_validation) -> dict:
         "priceDeviationPct": indicators.get("price_deviation_pct"),
         "spread": indicators.get("spread"),
         "spreadPct": indicators.get("spread_pct"),
-        "liquidity": indicators.get("liquidity") or {},
+        "liquidity": _camelize_known(indicators.get("liquidity") or {}),
         "gex": _build_gex_indicators(market_context, strategy_validation),
     }
 
@@ -365,7 +394,7 @@ def _summarize_gex_level_for_validation(level: dict) -> dict:
 
     return {
         "strike": level.get("strike"),
-        "type": level.get("type"),
+        "dominantSide": level.get("dominantSide"),
         "position": level.get("position"),
         "role": role,
         "distancePctFromSpot": level.get("distancePctFromSpot"),
@@ -395,8 +424,10 @@ def _sanitize_check_value(name: str, value: Any, indicators: Optional[dict] = No
         return {
             "targetWallStrike": target_wall.get("strike"),
             "targetWallType": target_wall.get("type") or target_wall.get("option_type"),
+            "targetWallDominantSide": target_wall.get("dominantSide"),
             "stopWallStrike": stop_wall.get("strike"),
             "stopWallType": stop_wall.get("type") or stop_wall.get("option_type"),
+            "stopWallDominantSide": stop_wall.get("dominantSide"),
             "targetMode": value.get("targetMode"),
             "walls": _build_validation_gex_walls(indicators or {}),
         }

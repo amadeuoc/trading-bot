@@ -47,7 +47,7 @@ def _empty_market_context() -> Dict[str, Any]:
             "bid": None,
             "last": None,
             "volume": None,
-            "openInterest": None,
+            "open_interest": None,
             "gamma": None
         },
         "underlying": {
@@ -180,6 +180,16 @@ def _debug_missing_gamma(
     )
 
 
+def _debug_unknown_option_contract(underlying, expiration, right, strike) -> None:
+    print(
+        "[IBKR] Skipping unknown option contract:",
+        underlying,
+        expiration,
+        right,
+        strike
+    )
+
+
 def _get_underlying_price(ib, ticker_symbol: str) -> Optional[float]:
     from ib_insync import Stock
 
@@ -217,39 +227,60 @@ def _get_option_quote(ib, normalized: dict) -> Dict[str, Optional[float]]:
         IB_EXCHANGE,
         currency=IB_CURRENCY
     )
-    ib.qualifyContracts(contract)
+    qualified_contracts = ib.qualifyContracts(contract)
+    if not qualified_contracts:
+        _debug_unknown_option_contract(
+            underlying,
+            expiration,
+            right,
+            option.get("strike")
+        )
+        return {
+            "ask": None,
+            "bid": None,
+            "last": None,
+            "volume": None,
+            "open_interest": None,
+            "gamma": None
+        }
+    contract = qualified_contracts[0]
 
     # Generic ticks 100/101 may expose option volume/open interest depending on
     # IBKR subscriptions and exchange support. Open interest is not guaranteed.
-    ticker = ib.reqMktData(contract, "100,101", False, False, [])
-    ib.sleep(IB_QUOTE_WAIT_SECONDS)
+    ticker = None
+    try:
+        ticker = ib.reqMktData(contract, "100,101", False, False, [])
+        ib.sleep(IB_QUOTE_WAIT_SECONDS)
 
-    open_interest = (
-        _safe_float(getattr(ticker, "callOpenInterest", None))
-        if option.get("type") == "CALL"
-        else _safe_float(getattr(ticker, "putOpenInterest", None))
-    )
-
-    quote = {
-        "ask": _safe_float(ticker.ask),
-        "bid": _safe_float(ticker.bid),
-        "last": _get_option_last(ticker),
-        "volume": _safe_float(ticker.volume),
-        "openInterest": open_interest,
-        "gamma": _wait_for_option_gamma(ib, ticker)
-    }
-    if quote["gamma"] is None:
-        _debug_missing_gamma(
-            underlying,
-            option.get("expiration") or expiration,
-            option.get("type"),
-            option.get("strike"),
-            ticker,
-            open_interest=open_interest
+        open_interest = (
+            _safe_float(getattr(ticker, "callOpenInterest", None))
+            if option.get("type") == "CALL"
+            else _safe_float(getattr(ticker, "putOpenInterest", None))
         )
+        gamma = _wait_for_option_gamma(ib, ticker)
 
-    ib.cancelMktData(contract)
-    return quote
+        quote = {
+            "ask": _safe_float(ticker.ask),
+            "bid": _safe_float(ticker.bid),
+            "last": _get_option_last(ticker),
+            "volume": _safe_float(ticker.volume),
+            "open_interest": open_interest,
+            "gamma": gamma
+        }
+        if quote["gamma"] is None:
+            _debug_missing_gamma(
+                underlying,
+                option.get("expiration") or expiration,
+                option.get("type"),
+                option.get("strike"),
+                ticker,
+                open_interest=open_interest
+            )
+
+        return quote
+    finally:
+        if ticker is not None:
+            ib.cancelMktData(contract)
 
 
 def _get_option_chain_oi_proxy(
@@ -346,40 +377,28 @@ def _get_option_chain_oi_proxy(
 
     alert_type = option.get("type")
     alert_strike = _safe_float(target_strike)
-    call_strikes = {
-        strike for strike in strikes_in_range
-        if strike > current_price
-    }
-    put_strikes = {
-        strike for strike in strikes_in_range
-        if strike < current_price
-    }
+    selected_strikes = set(strikes_in_range)
 
     if alert_strike is not None:
-        if alert_type == "CALL":
-            call_strikes.add(alert_strike)
-        if alert_type == "PUT":
-            put_strikes.add(alert_strike)
+        selected_strikes.add(alert_strike)
 
-    _debug_option_chain(underlying, "trade-oriented strike sets", {
+    _debug_option_chain(underlying, "gex strike set", {
         "alertType": alert_type,
         "alertStrike": alert_strike,
-        "callStrikeCount": len(call_strikes),
-        "putStrikeCount": len(put_strikes),
-        "callStrikes": sorted(call_strikes)[:40],
-        "putStrikes": sorted(put_strikes)[:40]
+        "strikeCount": len(selected_strikes),
+        "strikes": sorted(selected_strikes)[:40]
     })
 
-    # Ultra-short market data is trade-oriented: target-side calls above spot,
-    # protection-side puts below spot, and the alerted contract even when it is
+    # GEX is calculated per strike, so every selected strike needs both the
+    # CALL and PUT side. The alerted contract is included even when it is
     # outside the default range.
     rows = []
     seen_contracts = set()
-    for option_type, right, selected_strikes in (
-        ("CALL", "C", sorted(call_strikes)),
-        ("PUT", "P", sorted(put_strikes)),
+    for option_type, right in (
+        ("CALL", "C"),
+        ("PUT", "P"),
     ):
-        for strike in selected_strikes:
+        for strike in sorted(selected_strikes):
             contract_key = (option_type, _safe_float(strike))
             if contract_key in seen_contracts:
                 continue
@@ -393,48 +412,60 @@ def _get_option_chain_oi_proxy(
                 IB_EXCHANGE,
                 currency=IB_CURRENCY
             )
-            ib.qualifyContracts(contract)
+            qualified_contracts = ib.qualifyContracts(contract)
+            if not qualified_contracts:
+                _debug_unknown_option_contract(
+                    underlying,
+                    expiration,
+                    right,
+                    strike
+                )
+                continue
+            contract = qualified_contracts[0]
 
             # Open interest is best-effort from market data ticks. IBKR often
             # returns None unless the subscription and venue support it.
-            ticker = ib.reqMktData(contract, "100,101", False, False, [])
-            ib.sleep(IB_QUOTE_WAIT_SECONDS)
+            ticker = None
+            try:
+                ticker = ib.reqMktData(contract, "100,101", False, False, [])
+                ib.sleep(IB_QUOTE_WAIT_SECONDS)
 
-            open_interest = (
-                _safe_float(getattr(ticker, "callOpenInterest", None))
-                if option_type == "CALL"
-                else _safe_float(getattr(ticker, "putOpenInterest", None))
-            )
-            gamma = _wait_for_option_gamma(ib, ticker)
-            if gamma is None:
-                _debug_missing_gamma(
-                    underlying,
-                    display_expiration,
-                    option_type,
-                    strike,
-                    ticker,
-                    open_interest=open_interest
+                open_interest = (
+                    _safe_float(getattr(ticker, "callOpenInterest", None))
+                    if option_type == "CALL"
+                    else _safe_float(getattr(ticker, "putOpenInterest", None))
                 )
+                gamma = _wait_for_option_gamma(ib, ticker)
+                if gamma is None:
+                    _debug_missing_gamma(
+                        underlying,
+                        display_expiration,
+                        option_type,
+                        strike,
+                        ticker,
+                        open_interest=open_interest
+                    )
 
-            rows.append({
-                "expiry": display_expiration,
-                "dte": dte,
-                "strike": _safe_float(strike),
-                "option_type": option_type,
-                "gamma": gamma,
-                "open_interest": open_interest,
-                "volume": _safe_float(ticker.volume),
-                "bid": _safe_float(ticker.bid),
-                "ask": _safe_float(ticker.ask),
-                "last": _get_option_last(ticker),
-                "is_alert_contract": (
-                    option_type == alert_type
-                    and alert_strike is not None
-                    and _safe_float(strike) == alert_strike
-                )
-            })
-
-            ib.cancelMktData(contract)
+                rows.append({
+                    "expiry": display_expiration,
+                    "dte": dte,
+                    "strike": _safe_float(strike),
+                    "option_type": option_type,
+                    "gamma": gamma,
+                    "open_interest": open_interest,
+                    "volume": _safe_float(ticker.volume),
+                    "bid": _safe_float(ticker.bid),
+                    "ask": _safe_float(ticker.ask),
+                    "last": _get_option_last(ticker),
+                    "is_alert_contract": (
+                        option_type == alert_type
+                        and alert_strike is not None
+                        and _safe_float(strike) == alert_strike
+                    )
+                })
+            finally:
+                if ticker is not None:
+                    ib.cancelMktData(contract)
 
     _debug_option_chain(underlying, "final optionChain", {
         "length": len(rows)
@@ -479,6 +510,27 @@ def _attach_gex_context(
     _debug_option_chain(underlying, "gex context", debug_data)
 
 
+def _enrich_option_from_alert_contract(context: Dict[str, Any]) -> None:
+    option = context.get("option") or {}
+    option_chain = context.get("optionChain") or []
+    alert_contract = next(
+        (
+            row for row in option_chain
+            if isinstance(row, dict) and row.get("is_alert_contract") is True
+        ),
+        None
+    )
+
+    if not alert_contract:
+        return
+
+    for field in ("open_interest", "volume", "bid", "ask", "last", "gamma"):
+        if option.get(field) is None:
+            option[field] = alert_contract.get(field)
+
+    context["option"] = option
+
+
 def get_ultra_short_market_context(normalized: dict) -> Dict[str, Any]:
     context = _empty_market_context()
 
@@ -500,6 +552,7 @@ def get_ultra_short_market_context(normalized: dict) -> Dict[str, Any]:
                 normalized,
                 current_price
             )
+            _enrich_option_from_alert_contract(context)
             _attach_gex_context(context, current_price, underlying)
 
     except Exception as exc:
