@@ -78,8 +78,22 @@ def _filter_trade_walls(gex_context, position, behavior):
     ]
 
 
+def _filter_defensive_stop_walls(gex_context, position, behaviors):
+    return [
+        wall for wall in _get_walls(gex_context)
+        if _get_value(wall, "position") == position
+        and _get_value(wall, "behavior") in behaviors
+        and _wall_strength(wall) > 0
+    ]
+
+
 def _select_nearest_trade_wall(gex_context, position, behavior):
     walls = _filter_trade_walls(gex_context, position, behavior)
+    return min(walls, key=_wall_distance) if walls else None
+
+
+def _select_nearest_defensive_stop_wall(gex_context, position, behaviors):
+    walls = _filter_defensive_stop_walls(gex_context, position, behaviors)
     return min(walls, key=_wall_distance) if walls else None
 
 
@@ -203,11 +217,15 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
     trade_plan["targetSelectionMode"] = "nearest_executable"
 
     if alert_side == "CALL":
-        stop_wall = _select_nearest_trade_wall(gex_context, "below", "support")
+        stop_wall = _select_nearest_defensive_stop_wall(
+            gex_context,
+            "below",
+            ("support", "mixed")
+        )
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive support below for CALL stop")
+            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive support or mixed level below for CALL stop")
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
 
@@ -233,11 +251,15 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
             trade_plan["target"] = target
 
     elif alert_side == "PUT":
-        stop_wall = _select_nearest_trade_wall(gex_context, "above", "resistance")
+        stop_wall = _select_nearest_defensive_stop_wall(
+            gex_context,
+            "above",
+            ("resistance", "mixed")
+        )
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive resistance above for PUT stop")
+            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive resistance or mixed level above for PUT stop")
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") + stop_buffer
 
