@@ -11,6 +11,13 @@ from app.validators.router import validate_by_strategy
 MARKET_TZ = ZoneInfo("America/New_York")
 
 
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _timestamp_to_market_datetime(timestamp):
     try:
         ts = float(timestamp)
@@ -220,6 +227,16 @@ def _build_market_data(market_context, classification) -> dict:
 def _wall_key(wall):
     if not isinstance(wall, dict):
         return None
+    return (
+        wall.get("strike"),
+        wall.get("position"),
+        wall.get("behavior"),
+    )
+
+
+def _strike_key(wall):
+    if not isinstance(wall, dict):
+        return None
     return wall.get("strike")
 
 
@@ -227,13 +244,18 @@ def _summarize_wall(wall):
     if not isinstance(wall, dict):
         return None
 
+    distance = _safe_float(
+        wall.get("distance_from_spot")
+        if "distance_from_spot" in wall
+        else wall.get("distanceFromSpot")
+    )
+
     return {
         "strike": wall.get("strike"),
         "dominantSide": wall.get("dominant_side") or wall.get("dominantSide"),
         "position": wall.get("position"),
-        "distancePctFromSpot": wall.get("distance_pct_from_spot") or wall.get("distancePctFromSpot"),
+        "distanceFromSpot": abs(distance) if distance is not None else None,
         "hybridStrength": wall.get("hybrid_strength") or wall.get("hybridStrength"),
-        "sign": wall.get("sign"),
         "behavior": wall.get("behavior"),
     }
 
@@ -266,34 +288,39 @@ def _build_strike_range(gex: dict) -> dict:
     }
 
 
-def _build_selector_wall(gex: dict, key: str):
-    return _summarize_wall(gex.get(key))
-
-
-def _build_significant_levels_summary(gex: dict) -> dict:
-    return {
-        "nearestAbove": _build_selector_wall(gex, "nearest_above"),
-        "nearestBelow": _build_selector_wall(gex, "nearest_below"),
-        "strongestAbove": _build_selector_wall(gex, "strongest_wall_above"),
-        "strongestBelow": _build_selector_wall(gex, "strongest_wall_below"),
+def _build_significant_levels(gex: dict, trade_walls: dict) -> list:
+    walls = gex.get("walls") or []
+    selected_keys = {
+        key for key in (
+            _wall_key(trade_walls.get("targetWall")),
+            _wall_key(trade_walls.get("stopWall")),
+        )
+        if key is not None
     }
+    significant = [
+        wall for wall in walls
+        if isinstance(wall, dict)
+        and (
+            (wall.get("hybrid_strength") or 0) > 0
+            or _wall_key(wall) in selected_keys
+        )
+    ]
 
-
-def _build_trade_wall_selectors(gex: dict) -> dict:
-    return {
-        "nearestAbove": _build_selector_wall(gex, "nearest_trade_wall_above"),
-        "nearestBelow": _build_selector_wall(gex, "nearest_trade_wall_below"),
-        "strongestAbove": _build_selector_wall(gex, "strongest_trade_wall_above"),
-        "strongestBelow": _build_selector_wall(gex, "strongest_trade_wall_below"),
-    }
+    return [
+        _summarize_wall(wall)
+        for wall in sorted(
+            significant,
+            key=lambda item: item.get("strike") or 0
+        )
+    ]
 
 
 def _build_gex_levels(gex: dict, market_context: dict, trade_walls: dict) -> list:
     walls = gex.get("walls") or []
     option_chain = market_context.get("optionChain") or []
 
-    alert_contract_keys = {
-        _wall_key(row): row
+    alert_contract_strikes = {
+        _strike_key(row): row
         for row in option_chain
         if isinstance(row, dict) and row.get("is_alert_contract") is True
     }
@@ -337,7 +364,7 @@ def _build_gex_levels(gex: dict, market_context: dict, trade_walls: dict) -> lis
         level = {
             **wall,
             "flags": {
-                "alertContract": key in alert_contract_keys,
+                "alertContract": _strike_key(wall) in alert_contract_strikes,
                 "wall": key in relevant_wall_keys,
                 "targetWall": is_target_wall,
                 "stopWall": is_stop_wall,
@@ -356,18 +383,14 @@ def _build_gex_indicators(market_context: dict, strategy_validation) -> dict:
         return {}
 
     trade_walls = _build_trade_walls(strategy_validation)
-    trade_wall_selectors = _build_trade_wall_selectors(gex)
     return {
         "source": gex.get("source"),
         "spot": gex.get("spot"),
         "dteMax": gex.get("dte_max"),
         "strikeRange": _build_strike_range(gex),
-        "significantLevels": _build_significant_levels_summary(gex),
+        "significantLevels": _build_significant_levels(gex, trade_walls),
         "levels": _build_gex_levels(gex, market_context, trade_walls),
-        "tradeWalls": {
-            **trade_wall_selectors,
-            **trade_walls,
-        },
+        "tradeWalls": trade_walls,
     }
 
 
