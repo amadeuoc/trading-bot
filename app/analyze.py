@@ -429,6 +429,7 @@ def _sanitize_check_value(name: str, value: Any, indicators: Optional[dict] = No
             "stopWallType": stop_wall.get("type") or stop_wall.get("option_type"),
             "stopWallDominantSide": stop_wall.get("dominantSide"),
             "targetMode": value.get("targetMode"),
+            "targetSelectionMode": value.get("targetSelectionMode"),
             "walls": _build_validation_gex_walls(indicators or {}),
         }
 
@@ -476,6 +477,7 @@ def _build_order_proposal(decision: str, strategy_validation):
         "stopLoss": order.get("stopLoss"),
         "takeProfit": order.get("takeProfit"),
         "targetMode": order.get("targetMode"),
+        "targetSelectionMode": order.get("targetSelectionMode"),
         "trailing": order.get("trailing"),
     }
 

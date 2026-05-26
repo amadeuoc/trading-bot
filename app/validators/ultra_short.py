@@ -65,6 +65,10 @@ def _wall_strength(wall):
     return _safe_float(_get_value(wall, "hybrid_strength")) or 0
 
 
+def _wall_distance(wall):
+    return abs(_safe_float(_get_value(wall, "distance_from_spot")) or 0)
+
+
 def _filter_trade_walls(gex_context, position, behavior):
     return [
         wall for wall in _get_walls(gex_context)
@@ -74,9 +78,65 @@ def _filter_trade_walls(gex_context, position, behavior):
     ]
 
 
-def _select_strongest_trade_wall(gex_context, position, behavior):
+def _select_nearest_trade_wall(gex_context, position, behavior):
     walls = _filter_trade_walls(gex_context, position, behavior)
-    return max(walls, key=_wall_strength) if walls else None
+    return min(walls, key=_wall_distance) if walls else None
+
+
+def _target_candidates_by_proximity(gex_context, position, behavior):
+    return sorted(
+        _filter_trade_walls(gex_context, position, behavior),
+        key=_wall_distance
+    )
+
+
+def _calculate_candidate_target(alert_side, target_wall, target_buffer):
+    strike = _safe_float(_get_value(target_wall, "strike"))
+    if strike is None or target_buffer is None:
+        return None
+
+    if alert_side == "CALL":
+        return strike - target_buffer
+    if alert_side == "PUT":
+        return strike + target_buffer
+    return None
+
+
+def _is_executable_target(alert_side, entry, target):
+    entry = _safe_float(entry)
+    target = _safe_float(target)
+
+    if entry is None or target is None:
+        return False
+    if alert_side == "CALL":
+        return target > entry
+    if alert_side == "PUT":
+        return target < entry
+    return False
+
+
+def _select_nearest_executable_target_wall(
+    gex_context,
+    alert_side,
+    entry,
+    target_buffer,
+    position,
+    behavior
+):
+    rejected = []
+
+    for wall in _target_candidates_by_proximity(gex_context, position, behavior):
+        target = _calculate_candidate_target(alert_side, wall, target_buffer)
+        if _is_executable_target(alert_side, entry, target):
+            return wall, target, rejected
+
+        rejected.append({
+            "strike": _get_value(wall, "strike"),
+            "target": target,
+            "reason": "Target is not executable after buffer"
+        })
+
+    return None, None, rejected
 
 
 def _empty_gex_trade_plan(spot=None, reason="No GEX context available"):
@@ -85,6 +145,7 @@ def _empty_gex_trade_plan(spot=None, reason="No GEX context available"):
         "stop": None,
         "target": None,
         "targetMode": "unknown",
+        "targetSelectionMode": "unknown",
         "trailing": {
             "enabled": False,
             "activationLevel": None,
@@ -93,6 +154,9 @@ def _empty_gex_trade_plan(spot=None, reason="No GEX context available"):
         "reason": reason,
         "targetWall": None,
         "stopWall": None,
+        "targetSelection": {
+            "rejectedCandidates": []
+        },
         "checks": []
     }
 
@@ -135,59 +199,68 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
     target_buffer = compute_target_buffer(spot)
     stop_buffer = compute_stop_buffer(spot)
 
-    trade_plan = _empty_gex_trade_plan(spot, "GEX order built from strongest trade walls")
+    trade_plan = _empty_gex_trade_plan(spot, "GEX order built from nearest executable trade walls")
+    trade_plan["targetSelectionMode"] = "nearest_executable"
 
     if alert_side == "CALL":
-        target_wall = _select_strongest_trade_wall(gex_context, "above", "resistance")
-        stop_wall = _select_strongest_trade_wall(gex_context, "below", "support")
-        trade_plan["targetWall"] = _wall_to_dict(target_wall)
+        stop_wall = _select_nearest_trade_wall(gex_context, "below", "support")
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
-        if target_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No resistance above for CALL target")
-        elif _get_value(target_wall, "sign") == "negative":
-            trade_plan["targetMode"] = "none_trailing_after_wall"
-            trade_plan["trailing"] = {
-                "enabled": True,
-                "activationLevel": _get_value(target_wall, "strike"),
-                "direction": "up"
-            }
-        else:
-            trade_plan["targetMode"] = "fixed"
-            trade_plan["target"] = _get_value(target_wall, "strike") - target_buffer
-
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No support below for CALL stop")
-        elif _get_value(stop_wall, "sign") == "negative":
-            trade_plan["stop"] = _get_value(stop_wall, "strike") + stop_buffer
+            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive support below for CALL stop")
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
+
+        target_wall, target, rejected = _select_nearest_executable_target_wall(
+            gex_context,
+            alert_side,
+            spot,
+            target_buffer,
+            "above",
+            "resistance"
+        )
+        trade_plan["targetSelection"]["rejectedCandidates"] = rejected
+        trade_plan["targetWall"] = _wall_to_dict(target_wall)
+        if target_wall is None:
+            _add_gex_trade_plan_check(
+                trade_plan,
+                False,
+                "No executable GEX target wall after buffer checks",
+                {"rejectedCandidates": rejected}
+            )
+        else:
+            trade_plan["targetMode"] = "fixed"
+            trade_plan["target"] = target
 
     elif alert_side == "PUT":
-        target_wall = _select_strongest_trade_wall(gex_context, "below", "support")
-        stop_wall = _select_strongest_trade_wall(gex_context, "above", "resistance")
-        trade_plan["targetWall"] = _wall_to_dict(target_wall)
+        stop_wall = _select_nearest_trade_wall(gex_context, "above", "resistance")
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
-        if target_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No support below for PUT target")
-        elif _get_value(target_wall, "sign") == "negative":
-            trade_plan["targetMode"] = "none_trailing_after_wall"
-            trade_plan["trailing"] = {
-                "enabled": True,
-                "activationLevel": _get_value(target_wall, "strike"),
-                "direction": "down"
-            }
-        else:
-            trade_plan["targetMode"] = "fixed"
-            trade_plan["target"] = _get_value(target_wall, "strike") + target_buffer
-
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, True, "No resistance above for PUT stop")
-        elif _get_value(stop_wall, "sign") == "negative":
-            trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
+            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive resistance above for PUT stop")
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") + stop_buffer
+
+        target_wall, target, rejected = _select_nearest_executable_target_wall(
+            gex_context,
+            alert_side,
+            spot,
+            target_buffer,
+            "below",
+            "support"
+        )
+        trade_plan["targetSelection"]["rejectedCandidates"] = rejected
+        trade_plan["targetWall"] = _wall_to_dict(target_wall)
+        if target_wall is None:
+            _add_gex_trade_plan_check(
+                trade_plan,
+                False,
+                "No executable GEX target wall after buffer checks",
+                {"rejectedCandidates": rejected}
+            )
+        else:
+            trade_plan["targetMode"] = "fixed"
+            trade_plan["target"] = target
 
     else:
         trade_plan["reason"] = "Unknown alert side for GEX order"
@@ -205,6 +278,7 @@ def build_ultra_short_gex_order_from_trade_plan(trade_plan) -> dict:
         "stopLoss": trade_plan.get("stop"),
         "takeProfit": trade_plan.get("target"),
         "targetMode": trade_plan.get("targetMode"),
+        "targetSelectionMode": trade_plan.get("targetSelectionMode"),
         "trailing": trade_plan.get("trailing"),
         "gexReason": trade_plan.get("reason"),
         "gexWalls": {
@@ -356,17 +430,22 @@ def validate_ultra_short(
             "strongest_call_wall": _wall_to_dict(_get_value(gex_context, "strongest_call_wall")),
             "strongest_put_wall": _wall_to_dict(_get_value(gex_context, "strongest_put_wall")),
             "targetMode": order_proposal.get("targetMode"),
+            "targetSelectionMode": order_proposal.get("targetSelectionMode"),
             "trailing.enabled": order_proposal.get("trailing", {}).get("enabled"),
             "trailing.activationLevel": order_proposal.get("trailing", {}).get("activationLevel"),
             "stopLoss": order_proposal.get("stopLoss"),
             "takeProfit": order_proposal.get("takeProfit"),
             "gexReason": order_proposal.get("gexReason")
         }
+        failed_plan_checks = [
+            check for check in trade_plan.get("checks", [])
+            if not check.get("passed")
+        ]
         _add_check(
             checks,
             "gex_order",
-            True,
-            "GEX order context attached",
+            not failed_plan_checks,
+            "GEX order context attached" if not failed_plan_checks else failed_plan_checks[0].get("reason"),
             gex_summary
         )
 
