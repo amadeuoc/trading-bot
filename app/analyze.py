@@ -126,7 +126,6 @@ def _camelize_known(value: Any):
         "net_hybrid_gex": "netHybridGex",
         "call_strength": "callStrength",
         "put_strength": "putStrength",
-        "dominant_side": "dominantSide",
         "signed_flow_gex": "signedFlowGex",
         "signed_flow_gex_total": "signedFlowGexTotal",
         "sign_score": "signScore",
@@ -139,8 +138,6 @@ def _camelize_known(value: Any):
         "nearest_trade_wall_below": "nearestTradeWallBelow",
         "strongest_trade_wall_above": "strongestTradeWallAbove",
         "strongest_trade_wall_below": "strongestTradeWallBelow",
-        "strongest_call_wall": "strongestCallWall",
-        "strongest_put_wall": "strongestPutWall",
     }
     return {
         key_map.get(key, key): _camelize_known(item)
@@ -232,7 +229,6 @@ def _summarize_wall(wall):
 
     return {
         "strike": wall.get("strike"),
-        "dominantSide": wall.get("dominant_side") or wall.get("dominantSide"),
         "position": wall.get("position"),
         "distanceFromSpot": abs(distance) if distance is not None else None,
         "hybridStrength": wall.get("hybrid_strength") or wall.get("hybridStrength"),
@@ -397,7 +393,6 @@ def _summarize_gex_level_for_validation(level: dict) -> dict:
 
     return {
         "strike": level.get("strike"),
-        "dominantSide": level.get("dominantSide"),
         "position": level.get("position"),
         "role": role,
         "distancePctFromSpot": level.get("distancePctFromSpot"),
@@ -427,10 +422,8 @@ def _sanitize_check_value(name: str, value: Any, indicators: Optional[dict] = No
         return {
             "targetWallStrike": target_wall.get("strike"),
             "targetWallType": target_wall.get("type") or target_wall.get("option_type"),
-            "targetWallDominantSide": target_wall.get("dominantSide"),
             "stopWallStrike": stop_wall.get("strike"),
             "stopWallType": stop_wall.get("type") or stop_wall.get("option_type"),
-            "stopWallDominantSide": stop_wall.get("dominantSide"),
             "targetMode": value.get("targetMode"),
             "targetSelectionMode": value.get("targetSelectionMode"),
             "walls": _build_validation_gex_walls(indicators or {}),

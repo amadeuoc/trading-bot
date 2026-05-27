@@ -79,10 +79,15 @@ def infer_aggressor(bid, ask, last) -> Literal["buyer", "seller", "unknown"]:
         return "unknown"
     if bid <= 0 or ask <= 0 or ask <= bid:
         return "unknown"
-    if last >= ask * 0.995:
-        return "buyer"
-    if last <= bid * 1.005:
+
+    spread = ask - bid
+    lower_third = bid + spread / 3
+    upper_third = bid + 2 * spread / 3
+
+    if last <= lower_third:
         return "seller"
+    if last >= upper_third:
+        return "buyer"
     return "unknown"
 
 
@@ -169,17 +174,17 @@ def _position_for_strike(strike: float, spot: float) -> Literal["above", "below"
     return "at_spot"
 
 
-def compute_wall_sign_from_net_gex(
-    net_hybrid_gex,
-    hybrid_strength
+def compute_wall_sign_from_signed_flow(
+    signed_total,
+    abs_signed_total
 ) -> Tuple[Literal["positive", "negative", "mixed", "unknown"], Optional[float]]:
-    net_hybrid_gex = _safe_float(net_hybrid_gex)
-    hybrid_strength = _safe_float(hybrid_strength)
+    signed_total = _safe_float(signed_total)
+    abs_signed_total = _safe_float(abs_signed_total)
 
-    if net_hybrid_gex is None or hybrid_strength is None or hybrid_strength <= 0:
+    if signed_total is None or abs_signed_total is None or abs_signed_total <= 0:
         return "unknown", None
 
-    score = net_hybrid_gex / hybrid_strength
+    score = signed_total / abs_signed_total
     if score >= 0.30:
         return "positive", score
     if score <= -0.30:
@@ -244,15 +249,6 @@ def build_gex_walls(
         put_strength = abs(put_hybrid_gex)
         hybrid_strength = call_strength + put_strength
 
-        if call_strength > put_strength:
-            dominant_side = "CALL"
-        elif put_strength > call_strength:
-            dominant_side = "PUT"
-        elif hybrid_strength > 0:
-            dominant_side = "mixed"
-        else:
-            dominant_side = "unknown"
-
         oi_gex = sum(_point_value(point, "oi_gex") for point in group)
         volume_gex = sum(_point_value(point, "volume_gex") for point in group)
         hybrid_gex = net_hybrid_gex
@@ -260,21 +256,25 @@ def build_gex_walls(
         if min_hybrid_gex is not None and hybrid_strength < min_hybrid_gex:
             continue
 
-        position = _position_for_strike(strike, spot)
-        sign, sign_score = compute_wall_sign_from_net_gex(
-            net_hybrid_gex,
-            hybrid_strength
-        )
         signed_total = sum(
             _point_value(point, "signed_flow_gex")
             for point in group
             if point.signed_flow_gex is not None
         )
+        abs_signed_total = sum(
+            abs(_point_value(point, "signed_flow_gex"))
+            for point in group
+            if point.signed_flow_gex is not None
+        )
+        position = _position_for_strike(strike, spot)
+        sign, sign_score = compute_wall_sign_from_signed_flow(
+            signed_total,
+            abs_signed_total
+        )
         behavior = determine_wall_behavior(position, sign)
 
         walls.append(GexWallContext(
             strike=strike,
-            dominant_side=dominant_side,
             position=position,
             distance_from_spot=strike - spot,
             distance_pct_from_spot=abs(strike - spot) / spot * 100,
@@ -369,14 +369,6 @@ def find_strongest_trade_wall_below(walls):
     ])
 
 
-def find_strongest_call_wall(walls):
-    return _strongest([wall for wall in walls if wall.dominant_side == "CALL"])
-
-
-def find_strongest_put_wall(walls):
-    return _strongest([wall for wall in walls if wall.dominant_side == "PUT"])
-
-
 def build_gex_context(
     raw_options,
     spot,
@@ -406,9 +398,7 @@ def build_gex_context(
         nearest_trade_wall_above=find_nearest_trade_wall_above(walls),
         nearest_trade_wall_below=find_nearest_trade_wall_below(walls),
         strongest_trade_wall_above=find_strongest_trade_wall_above(walls),
-        strongest_trade_wall_below=find_strongest_trade_wall_below(walls),
-        strongest_call_wall=find_strongest_call_wall(walls),
-        strongest_put_wall=find_strongest_put_wall(walls)
+        strongest_trade_wall_below=find_strongest_trade_wall_below(walls)
     )
 
 

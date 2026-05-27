@@ -451,8 +451,6 @@ def validate_ultra_short(
             "stopWall": order_proposal.get("gexWalls", {}).get("stopWall"),
             "strongest_wall_above": _wall_to_dict(_get_value(gex_context, "strongest_wall_above")),
             "strongest_wall_below": _wall_to_dict(_get_value(gex_context, "strongest_wall_below")),
-            "strongest_call_wall": _wall_to_dict(_get_value(gex_context, "strongest_call_wall")),
-            "strongest_put_wall": _wall_to_dict(_get_value(gex_context, "strongest_put_wall")),
             "targetMode": order_proposal.get("targetMode"),
             "targetSelectionMode": order_proposal.get("targetSelectionMode"),
             "trailing.enabled": order_proposal.get("trailing", {}).get("enabled"),

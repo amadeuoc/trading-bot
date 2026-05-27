@@ -59,7 +59,6 @@ class OptionGexPoint(BaseModel):
 
 class GexWallContext(BaseModel):
     strike: float
-    dominant_side: Literal["CALL", "PUT", "mixed", "unknown"] = "unknown"
     position: Literal["above", "below", "at_spot"]
     distance_from_spot: Optional[float] = None
     distance_pct_from_spot: Optional[float] = None
@@ -100,8 +99,6 @@ class GexContext(BaseModel):
     nearest_trade_wall_below: Optional[GexWallContext] = None
     strongest_trade_wall_above: Optional[GexWallContext] = None
     strongest_trade_wall_below: Optional[GexWallContext] = None
-    strongest_call_wall: Optional[GexWallContext] = None
-    strongest_put_wall: Optional[GexWallContext] = None
 
 
 class MarketContext(BaseModel):
