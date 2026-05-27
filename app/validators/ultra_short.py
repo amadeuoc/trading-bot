@@ -377,8 +377,8 @@ def validate_ultra_short(
     ticker_context: Any = None
 ) -> dict:
     market_context = market_context if isinstance(market_context, dict) else {}
-    option_market = market_context.get("option") or {}
     indicators = market_context.get("indicators") or {}
+    liquidity = indicators.get("liquidity") or {}
     gex_context = market_context.get("gex_context") or market_context.get("gex")
 
     checks = []
@@ -393,9 +393,10 @@ def validate_ultra_short(
         price_deviation_pct
     )
 
-    bid = _safe_float(option_market.get("bid"))
-    ask = _safe_float(option_market.get("ask"))
-    volume = _safe_float(option_market.get("volume"))
+    bid = _safe_float(liquidity.get("bid"))
+    ask = _safe_float(liquidity.get("ask"))
+    volume = _safe_float(liquidity.get("volume"))
+    open_interest = _safe_float(liquidity.get("open_interest"))
     liquidity_failures = []
     if bid is None or bid <= 0:
         liquidity_failures.append("bid must be greater than 0")
@@ -412,7 +413,8 @@ def validate_ultra_short(
         {
             "bid": bid,
             "ask": ask,
-            "volume": volume
+            "volume": volume,
+            "open_interest": open_interest
         }
     )
 

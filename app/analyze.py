@@ -192,26 +192,6 @@ def _build_market_data(market_context, classification) -> dict:
     strategy = classification.get("strategy") if isinstance(classification, dict) else None
     option_chain = market_context.get("optionChain") or []
     option = dict(market_context.get("option") or {})
-    alert_contract = next(
-        (
-            row for row in option_chain
-            if isinstance(row, dict) and row.get("is_alert_contract") is True
-        ),
-        None
-    )
-
-    if alert_contract:
-        fill_fields = {
-            "gamma": "gamma",
-            "open_interest": "open_interest",
-            "volume": "volume",
-            "bid": "bid",
-            "ask": "ask",
-            "last": "last",
-        }
-        for option_key, chain_key in fill_fields.items():
-            if option.get(option_key) is None:
-                option[option_key] = alert_contract.get(chain_key)
 
     return {
         "source": "ibkr" if strategy == "ultra_short" else None,

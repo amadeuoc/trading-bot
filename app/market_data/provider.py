@@ -9,7 +9,7 @@ def _empty_market_context() -> Dict[str, Any]:
             "ask": None,
             "bid": None,
             "volume": None,
-            "openInterest": None,
+            "open_interest": None,
         },
         "underlying": {
             "price": None,
