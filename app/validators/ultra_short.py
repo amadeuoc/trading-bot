@@ -103,10 +103,24 @@ def _select_structural_stop_wall(gex_context, position, behaviors, clear_behavio
     if not walls:
         return None
 
-    max_strength = max(_wall_strength(wall) for wall in walls) or 1
+    clear_walls = [
+        wall for wall in walls
+        if _get_value(wall, "behavior") == clear_behavior
+    ]
+    if clear_walls:
+        return min(clear_walls, key=_wall_distance)
+
+    fallback_walls = [
+        wall for wall in walls
+        if _get_value(wall, "behavior") in ("mixed", "unknown")
+    ]
+    if not fallback_walls:
+        return None
+
+    max_strength = max(_wall_strength(wall) for wall in fallback_walls) or 1
     positive_distances = [
         _wall_distance(wall)
-        for wall in walls
+        for wall in fallback_walls
         if _wall_distance(wall) > 0
     ]
     nearest_distance = min(positive_distances) if positive_distances else 1
@@ -118,7 +132,7 @@ def _select_structural_stop_wall(gex_context, position, behaviors, clear_behavio
         behavior_rank = _behavior_score(_get_value(wall, "behavior"), clear_behavior)
         return strength_rank * 0.50 + distance_rank * 0.35 + behavior_rank * 0.15
 
-    return max(walls, key=score)
+    return max(fallback_walls, key=score)
 
 
 def _target_candidates_by_proximity_for_behaviors(gex_context, position, behaviors):
