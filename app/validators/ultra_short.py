@@ -69,13 +69,24 @@ def _wall_distance(wall):
     return abs(_safe_float(_get_value(wall, "distance_from_spot")) or 0)
 
 
-def _filter_trade_walls(gex_context, position, behavior):
-    return [
-        wall for wall in _get_walls(gex_context)
-        if _get_value(wall, "position") == position
-        and _get_value(wall, "behavior") == behavior
-        and _wall_strength(wall) > 0
-    ]
+def _behavior_score(behavior, clear_behavior):
+    if behavior == clear_behavior:
+        return 1.00
+    if behavior == "mixed":
+        return 0.85
+    if behavior == "unknown":
+        return 0.75
+    return 0
+
+
+def _target_behavior_rank(behavior, clear_behavior):
+    if behavior == clear_behavior:
+        return 3
+    if behavior == "mixed":
+        return 2
+    if behavior == "unknown":
+        return 1
+    return 0
 
 
 def _filter_defensive_stop_walls(gex_context, position, behaviors):
@@ -87,20 +98,50 @@ def _filter_defensive_stop_walls(gex_context, position, behaviors):
     ]
 
 
-def _select_nearest_trade_wall(gex_context, position, behavior):
-    walls = _filter_trade_walls(gex_context, position, behavior)
-    return min(walls, key=_wall_distance) if walls else None
-
-
-def _select_nearest_defensive_stop_wall(gex_context, position, behaviors):
+def _select_structural_stop_wall(gex_context, position, behaviors, clear_behavior):
     walls = _filter_defensive_stop_walls(gex_context, position, behaviors)
-    return min(walls, key=_wall_distance) if walls else None
+    if not walls:
+        return None
+
+    max_strength = max(_wall_strength(wall) for wall in walls) or 1
+    positive_distances = [
+        _wall_distance(wall)
+        for wall in walls
+        if _wall_distance(wall) > 0
+    ]
+    nearest_distance = min(positive_distances) if positive_distances else 1
+
+    def score(wall):
+        distance = _wall_distance(wall)
+        strength_rank = _wall_strength(wall) / max_strength
+        distance_rank = nearest_distance / distance if distance > 0 else 1
+        behavior_rank = _behavior_score(_get_value(wall, "behavior"), clear_behavior)
+        return strength_rank * 0.50 + distance_rank * 0.35 + behavior_rank * 0.15
+
+    return max(walls, key=score)
 
 
-def _target_candidates_by_proximity(gex_context, position, behavior):
+def _target_candidates_by_proximity_for_behaviors(gex_context, position, behaviors):
     return sorted(
-        _filter_trade_walls(gex_context, position, behavior),
+        [
+            wall for wall in _get_walls(gex_context)
+            if _get_value(wall, "position") == position
+            and _get_value(wall, "behavior") in behaviors
+            and _wall_strength(wall) > 0
+        ],
         key=_wall_distance
+    )
+
+
+def _is_structurally_better_target(checkpoint, candidate, clear_behavior):
+    checkpoint_strength = _wall_strength(checkpoint)
+    candidate_strength = _wall_strength(candidate)
+    checkpoint_behavior = _target_behavior_rank(_get_value(checkpoint, "behavior"), clear_behavior)
+    candidate_behavior = _target_behavior_rank(_get_value(candidate, "behavior"), clear_behavior)
+
+    return (
+        candidate_strength > checkpoint_strength
+        or candidate_behavior > checkpoint_behavior
     )
 
 
@@ -129,20 +170,28 @@ def _is_executable_target(alert_side, entry, target):
     return False
 
 
-def _select_nearest_executable_target_wall(
+def _select_structural_target_wall(
     gex_context,
     alert_side,
     entry,
     target_buffer,
     position,
-    behavior
+    behaviors,
+    clear_behavior
 ):
     rejected = []
+    candidates = _target_candidates_by_proximity_for_behaviors(
+        gex_context,
+        position,
+        behaviors
+    )
 
-    for wall in _target_candidates_by_proximity(gex_context, position, behavior):
+    executable = []
+    for wall in candidates:
         target = _calculate_candidate_target(alert_side, wall, target_buffer)
         if _is_executable_target(alert_side, entry, target):
-            return wall, target, rejected
+            executable.append((wall, target))
+            continue
 
         rejected.append({
             "strike": _get_value(wall, "strike"),
@@ -150,7 +199,15 @@ def _select_nearest_executable_target_wall(
             "reason": "Target is not executable after buffer"
         })
 
-    return None, None, rejected
+    if not executable:
+        return None, None, rejected, None
+
+    checkpoint_wall, checkpoint_target = executable[0]
+    for wall, target in executable[1:]:
+        if _is_structurally_better_target(checkpoint_wall, wall, clear_behavior):
+            return wall, target, rejected, _wall_to_dict(checkpoint_wall)
+
+    return checkpoint_wall, checkpoint_target, rejected, None
 
 
 def _empty_gex_trade_plan(spot=None, reason="No GEX context available"):
@@ -168,6 +225,7 @@ def _empty_gex_trade_plan(spot=None, reason="No GEX context available"):
         "reason": reason,
         "targetWall": None,
         "stopWall": None,
+        "checkpointWall": None,
         "targetSelection": {
             "rejectedCandidates": []
         },
@@ -213,31 +271,34 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
     target_buffer = compute_target_buffer(spot)
     stop_buffer = compute_stop_buffer(spot)
 
-    trade_plan = _empty_gex_trade_plan(spot, "GEX order built from nearest executable trade walls")
-    trade_plan["targetSelectionMode"] = "nearest_executable"
+    trade_plan = _empty_gex_trade_plan(spot, "GEX order built from structural trade walls")
+    trade_plan["targetSelectionMode"] = "structural"
 
     if alert_side == "CALL":
-        stop_wall = _select_nearest_defensive_stop_wall(
+        stop_wall = _select_structural_stop_wall(
             gex_context,
             "below",
-            ("support", "mixed")
+            ("support", "mixed", "unknown"),
+            "support"
         )
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive support or mixed level below for CALL stop")
+            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive support, mixed or unknown level below for CALL stop")
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") - stop_buffer
 
-        target_wall, target, rejected = _select_nearest_executable_target_wall(
+        target_wall, target, rejected, checkpoint = _select_structural_target_wall(
             gex_context,
             alert_side,
             spot,
             target_buffer,
             "above",
+            ("resistance", "mixed", "unknown"),
             "resistance"
         )
         trade_plan["targetSelection"]["rejectedCandidates"] = rejected
+        trade_plan["checkpointWall"] = checkpoint
         trade_plan["targetWall"] = _wall_to_dict(target_wall)
         if target_wall is None:
             _add_gex_trade_plan_check(
@@ -251,27 +312,30 @@ def build_ultra_short_gex_trade_plan(alert_side, spot, gex_context):
             trade_plan["target"] = target
 
     elif alert_side == "PUT":
-        stop_wall = _select_nearest_defensive_stop_wall(
+        stop_wall = _select_structural_stop_wall(
             gex_context,
             "above",
-            ("resistance", "mixed")
+            ("resistance", "mixed", "unknown"),
+            "resistance"
         )
         trade_plan["stopWall"] = _wall_to_dict(stop_wall)
 
         if stop_wall is None:
-            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive resistance or mixed level above for PUT stop")
+            _add_gex_trade_plan_check(trade_plan, False, "No valid defensive resistance, mixed or unknown level above for PUT stop")
         else:
             trade_plan["stop"] = _get_value(stop_wall, "strike") + stop_buffer
 
-        target_wall, target, rejected = _select_nearest_executable_target_wall(
+        target_wall, target, rejected, checkpoint = _select_structural_target_wall(
             gex_context,
             alert_side,
             spot,
             target_buffer,
             "below",
+            ("support", "mixed", "unknown"),
             "support"
         )
         trade_plan["targetSelection"]["rejectedCandidates"] = rejected
+        trade_plan["checkpointWall"] = checkpoint
         trade_plan["targetWall"] = _wall_to_dict(target_wall)
         if target_wall is None:
             _add_gex_trade_plan_check(
@@ -305,7 +369,8 @@ def build_ultra_short_gex_order_from_trade_plan(trade_plan) -> dict:
         "gexReason": trade_plan.get("reason"),
         "gexWalls": {
             "targetWall": trade_plan.get("targetWall"),
-            "stopWall": trade_plan.get("stopWall")
+            "stopWall": trade_plan.get("stopWall"),
+            "checkpointWall": trade_plan.get("checkpointWall")
         },
         "checks": trade_plan.get("checks", [])
     }
@@ -449,6 +514,7 @@ def validate_ultra_short(
         gex_summary = {
             "targetWall": order_proposal.get("gexWalls", {}).get("targetWall"),
             "stopWall": order_proposal.get("gexWalls", {}).get("stopWall"),
+            "checkpointWall": order_proposal.get("gexWalls", {}).get("checkpointWall"),
             "strongest_wall_above": _wall_to_dict(_get_value(gex_context, "strongest_wall_above")),
             "strongest_wall_below": _wall_to_dict(_get_value(gex_context, "strongest_wall_below")),
             "targetMode": order_proposal.get("targetMode"),
