@@ -125,12 +125,12 @@ let systemInitialLoaded = false;
 
 async function validateAlertWithBackend(alert) {
   try {
-    const res = await fetch("http://localhost:8000/analyze", {
+    const res = await fetch("http://localhost:8000/manageAlert", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ alert })
+      body: JSON.stringify({ rawAlert: alert })
     });
 
     return await res.json();
@@ -139,10 +139,20 @@ async function validateAlertWithBackend(alert) {
     console.error("BACKEND VALIDATION ERROR", err);
     return {
       status: "error",
-      decision: "SKIP",
-      reason: err.message
+      validation: {
+        decision: "SKIP",
+        reason: err.message,
+        checks: {}
+      },
+      classification: null,
+      marketContext: null,
+      orderProposal: null
     };
   }
+}
+
+function backendDecision(backendResult) {
+  return backendResult?.validation?.decision || null;
 }
 
 function pad(n) {
@@ -315,7 +325,7 @@ function renderAll() {
     const tags = data.activeTags || data.tags || data.tg || [];
     const execution = data.spread_execution || data.spreadExecution || data.se || "";
     const ts = getTimestamp(data);
-    const decision = item.validation?.decision;
+    const decision = backendDecision(item.validation);
 
     const div = document.createElement("div");
     div.className = `card ${item.isNew ? "new" : ""}`;
