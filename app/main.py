@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.models import AnalyzeRequest
 from app.normalize import normalize_alert
 from app.analyze import analyze_normalized
+from app.alert_management.router import router as alert_management_router
 
 app = FastAPI()
 
@@ -13,6 +14,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(alert_management_router)
 
 @app.get("/")
 def root():

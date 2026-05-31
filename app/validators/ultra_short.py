@@ -457,12 +457,14 @@ def validate_ultra_short(
 ) -> dict:
     market_context = market_context if isinstance(market_context, dict) else {}
     indicators = market_context.get("indicators") or {}
-    liquidity = indicators.get("liquidity") or {}
+    option_indicators = indicators.get("option") or {}
+    option_price = option_indicators.get("price") or {}
+    option_liquidity = option_indicators.get("liquidity") or {}
     gex_context = market_context.get("gex_context") or market_context.get("gex")
 
     checks = []
 
-    price_deviation_pct = _safe_float(indicators.get("price_deviation_pct"))
+    price_deviation_pct = _safe_float(option_price.get("priceDeviationPct"))
     price_passed = price_deviation_pct is not None and price_deviation_pct <= 5
     _add_check(
         checks,
@@ -472,10 +474,10 @@ def validate_ultra_short(
         price_deviation_pct
     )
 
-    bid = _safe_float(liquidity.get("bid"))
-    ask = _safe_float(liquidity.get("ask"))
-    volume = _safe_float(liquidity.get("volume"))
-    open_interest = _safe_float(liquidity.get("open_interest"))
+    bid = _safe_float(option_price.get("bid"))
+    ask = _safe_float(option_price.get("ask"))
+    volume = _safe_float(option_liquidity.get("volume"))
+    open_interest = _safe_float(option_liquidity.get("openInterest"))
     liquidity_failures = []
     if bid is None or bid <= 0:
         liquidity_failures.append("bid must be greater than 0")
@@ -497,7 +499,7 @@ def validate_ultra_short(
         }
     )
 
-    spread_pct = _safe_float(indicators.get("spread_pct"))
+    spread_pct = _safe_float(option_price.get("spreadPct"))
     spread_failures = []
     if spread_pct is None:
         spread_failures.append("spread_pct is missing")
