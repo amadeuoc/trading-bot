@@ -48,7 +48,13 @@ def _empty_market_context() -> Dict[str, Any]:
             "last": None,
             "volume": None,
             "open_interest": None,
-            "gamma": None
+            "delta": None,
+            "gamma": None,
+            "theta": None,
+            "vega": None,
+            "rho": None,
+            "iv": None,
+            "implied_volatility": None
         },
         "underlying": {
             "symbol": None,
@@ -107,13 +113,43 @@ def _get_option_metadata(normalized: dict) -> Dict[str, Any]:
     }
 
 
-def _get_option_gamma(ticker) -> Optional[float]:
+def _empty_option_greeks() -> Dict[str, Optional[float]]:
+    return {
+        "delta": None,
+        "gamma": None,
+        "theta": None,
+        "vega": None,
+        "rho": None,
+        "iv": None,
+        "implied_volatility": None
+    }
+
+
+def _get_option_greeks(ticker) -> Dict[str, Optional[float]]:
     for attr in ("modelGreeks", "lastGreeks", "bidGreeks", "askGreeks"):
         greeks = getattr(ticker, attr, None)
-        gamma = _safe_float(getattr(greeks, "gamma", None)) if greeks else None
-        if gamma is not None:
-            return gamma
-    return None
+        if not greeks:
+            continue
+
+        implied_volatility = _safe_float(getattr(greeks, "impliedVol", None))
+        values = {
+            "delta": _safe_float(getattr(greeks, "delta", None)),
+            "gamma": _safe_float(getattr(greeks, "gamma", None)),
+            "theta": _safe_float(getattr(greeks, "theta", None)),
+            "vega": _safe_float(getattr(greeks, "vega", None)),
+            "rho": _safe_float(getattr(greeks, "rho", None)),
+            "iv": implied_volatility,
+            "implied_volatility": implied_volatility
+        }
+
+        if any(value is not None for value in values.values()):
+            return values
+
+    return _empty_option_greeks()
+
+
+def _get_option_gamma(ticker) -> Optional[float]:
+    return _get_option_greeks(ticker).get("gamma")
 
 
 def _wait_for_option_gamma(
@@ -263,7 +299,7 @@ def _get_option_quote(ib, normalized: dict) -> Dict[str, Optional[float]]:
             "last": None,
             "volume": None,
             "open_interest": None,
-            "gamma": None
+            **_empty_option_greeks()
         }
     contract = qualified_contracts[0]
 
@@ -280,6 +316,7 @@ def _get_option_quote(ib, normalized: dict) -> Dict[str, Optional[float]]:
             else _safe_float(getattr(ticker, "putOpenInterest", None))
         )
         gamma = _wait_for_option_gamma(ib, ticker)
+        greeks = _get_option_greeks(ticker)
 
         quote = {
             "ask": _safe_float(ticker.ask),
@@ -287,7 +324,8 @@ def _get_option_quote(ib, normalized: dict) -> Dict[str, Optional[float]]:
             "last": _get_option_last(ticker),
             "volume": _safe_float(ticker.volume),
             "open_interest": open_interest,
-            "gamma": gamma
+            **greeks,
+            "gamma": gamma if gamma is not None else greeks.get("gamma")
         }
         if quote["gamma"] is None:
             _debug_missing_gamma(
@@ -474,6 +512,7 @@ def _get_option_chain_oi_proxy(
                 else _safe_float(getattr(ticker, "putOpenInterest", None))
             )
             gamma = _get_option_gamma(ticker)
+            greeks = _get_option_greeks(ticker)
             if gamma is None:
                 _debug_missing_gamma(
                     underlying,
@@ -489,7 +528,8 @@ def _get_option_chain_oi_proxy(
                 "dte": dte,
                 "strike": _safe_float(strike),
                 "option_type": option_type,
-                "gamma": gamma,
+                **greeks,
+                "gamma": gamma if gamma is not None else greeks.get("gamma"),
                 "open_interest": open_interest,
                 "volume": _safe_float(ticker.volume),
                 "bid": _safe_float(ticker.bid),
@@ -562,7 +602,20 @@ def _enrich_option_from_alert_contract(context: Dict[str, Any]) -> None:
     if not alert_contract:
         return
 
-    for field in ("open_interest", "volume", "bid", "ask", "last", "gamma"):
+    for field in (
+        "open_interest",
+        "volume",
+        "bid",
+        "ask",
+        "last",
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "rho",
+        "iv",
+        "implied_volatility",
+    ):
         if option.get(field) is None:
             option[field] = alert_contract.get(field)
 
