@@ -55,9 +55,10 @@ def validate_alert_endpoint(req: ValidateAlertRequest):
 @router.post("/buildOrderProposal")
 def build_order_proposal_endpoint(req: BuildOrderProposalRequest):
     return {
-        "status": "ok",
         "orderProposal": build_order_proposal(
-            req.normalizedAlert,
-            _model_to_dict(req.orderInputs),
+            _model_to_dict(req.instrument),
+            _model_to_dict(req.entry),
+            _model_to_dict(req.exitRules),
+            _model_to_dict(req.risk),
         ),
     }

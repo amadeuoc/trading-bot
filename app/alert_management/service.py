@@ -7,6 +7,64 @@ from app.alert_management.validation_service import validate_alert_contract
 from app.normalize import normalize_alert
 
 
+DEFAULT_MAX_RISK_AMOUNT = 100
+
+
+def _option(normalized: Dict[str, Any]) -> Dict[str, Any]:
+    return normalized.get("option") or {}
+
+
+def _underlying_symbol(normalized: Dict[str, Any]) -> Any:
+    option = _option(normalized)
+    return option.get("underlying") or normalized.get("underlying") or normalized.get("ticker")
+
+
+def _build_order_request(normalized: Dict[str, Any], indicators: Dict[str, Any]) -> Dict[str, Any]:
+    option = _option(normalized)
+    option_indicators = indicators.get("option") or {}
+    option_price = option_indicators.get("price") or {}
+    move_estimates = option_indicators.get("moveEstimates") or {}
+    underlying = indicators.get("underlying") or {}
+    trigger_symbol = _underlying_symbol(normalized)
+
+    return {
+        "instrument": {
+            "assetType": "OPTION",
+            "symbol": option.get("symbol") or normalized.get("symbol"),
+            "action": "BUY",
+            "multiplier": 100,
+        },
+        "entry": {
+            "price": option_price.get("ask"),
+            "orderType": "LMT",
+            "priceSource": "option_ask",
+        },
+        "exitRules": {
+            "stop": {
+                "triggerType": "UNDERLYING_PRICE",
+                "triggerSymbol": trigger_symbol,
+                "triggerPrice": underlying.get("stop"),
+                "estimatedInstrumentPrice": move_estimates.get("estimatedOptionPriceAtStop"),
+            },
+            "target": {
+                "triggerType": "UNDERLYING_PRICE",
+                "triggerSymbol": trigger_symbol,
+                "triggerPrice": underlying.get("target"),
+                "estimatedInstrumentPrice": move_estimates.get("estimatedOptionPriceAtTarget"),
+            },
+        },
+        "risk": {
+            "maxRiskAmount": DEFAULT_MAX_RISK_AMOUNT,
+            "model": {
+                "estimatedLossPerUnit": move_estimates.get("estimatedOptionLossToStop"),
+                "estimatedLossPerContract": move_estimates.get("estimatedLossPerContract"),
+                "estimatedRewardPerContract": move_estimates.get("estimatedRewardPerContract"),
+                "estimatedRiskReward": move_estimates.get("estimatedRiskReward"),
+            },
+        },
+    }
+
+
 def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
     normalized = normalize_alert(raw_alert)
     if normalized is None:
@@ -36,17 +94,12 @@ def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
 
     order_proposal = None
     if validation.get("decision") == "VALID":
+        order_request = _build_order_request(normalized, indicators)
         order_proposal = build_order_proposal(
-            normalized,
-            {
-                "entry": indicators.get("entry"),
-                "stop": indicators.get("stop"),
-                "target": indicators.get("target"),
-                "riskReward": indicators.get("riskReward"),
-                "riskTolerance": {"maxLossUsd": None},
-                "selectedWallAbove": (indicators.get("gex") or {}).get("walls", {}).get("selectedWallAbove"),
-                "selectedWallBelow": (indicators.get("gex") or {}).get("walls", {}).get("selectedWallBelow"),
-            },
+            order_request["instrument"],
+            order_request["entry"],
+            order_request["exitRules"],
+            order_request["risk"],
         )
 
     return {
