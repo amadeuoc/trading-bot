@@ -30,7 +30,7 @@ def _build_order_request(normalized: Dict[str, Any], indicators: Dict[str, Any])
     return {
         "instrument": {
             "assetType": "OPTION",
-            "symbol": option.get("symbol") or normalized.get("symbol"),
+            "symbol": normalized.get("symbol") or option.get("symbol"),
             "action": "BUY",
             "multiplier": 100,
         },
@@ -70,30 +70,31 @@ def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
     if normalized is None:
         return {
             "status": "error",
-            "decision": "SKIP",
-            "reason": "Invalid option symbol",
-            "normalizedAlert": None,
             "classification": {},
             "marketContext": {},
-            "indicators": {},
-            "validation": {},
-            "orderProposal": None,
-            "pipeline": {
-                "normalized": False,
-                "classified": False,
-                "marketDataAndIndicators": False,
-                "validated": False,
-                "orderProposalBuilt": False,
+            "validation": {
+                "status": "error",
+                "decision": "SKIP",
+                "reason": "Invalid option symbol",
+                "checks": {},
             },
+            "orderProposal": None,
         }
 
-    classification = classify_normalized_alert(normalized)
-    market_result = get_market_data_and_indicators(normalized, classification)
-    indicators = market_result["indicators"]
-    validation = validate_alert_contract(normalized, classification, indicators)
+    classification_response = classify_normalized_alert(normalized)
+    market_context_response = get_market_data_and_indicators(
+        normalized,
+        classification_response,
+    )
+    indicators = market_context_response.get("indicators") or {}
+    validation_response = validate_alert_contract(
+        normalized,
+        classification_response,
+        indicators,
+    )
 
     order_proposal = None
-    if validation.get("decision") == "VALID":
+    if validation_response.get("decision") == "VALID":
         order_request = _build_order_request(normalized, indicators)
         order_proposal = build_order_proposal(
             order_request["instrument"],
@@ -104,19 +105,8 @@ def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "status": "ok",
-        "decision": validation.get("decision"),
-        "reason": validation.get("reason"),
-        "normalizedAlert": normalized,
-        "classification": classification,
-        "marketContext": market_result["marketContext"],
-        "indicators": indicators,
-        "validation": validation,
+        "classification": classification_response,
+        "marketContext": market_context_response,
+        "validation": validation_response,
         "orderProposal": order_proposal,
-        "pipeline": {
-            "normalized": True,
-            "classified": True,
-            "marketDataAndIndicators": market_result.get("status") == "ok",
-            "validated": validation.get("status") == "ok",
-            "orderProposalBuilt": order_proposal is not None,
-        },
     }

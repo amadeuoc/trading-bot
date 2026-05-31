@@ -47,20 +47,23 @@ def validate_alert_contract(
         }
 
     option = indicators.get("option") or {}
+    option_price = option.get("price") or {}
+    option_liquidity = option.get("liquidity") or {}
+    move_estimates = option.get("moveEstimates") or {}
+    underlying = indicators.get("underlying") or {}
     trade = normalized_alert.get("trade") or {}
     alert_price = _safe_float(trade.get("price"))
-    current_price = _safe_float(option.get("ask"))
-    bid = _safe_float(option.get("bid"))
-    ask = _safe_float(option.get("ask"))
-    volume = _safe_float(option.get("volume"))
-    spread_pct = _safe_float(indicators.get("spreadPct"))
-    spread_abs = _safe_float(indicators.get("spreadAbs"))
-    deviation_pct = _safe_float(indicators.get("priceDeviationPct"))
-    risk_reward = _safe_float(indicators.get("riskReward"))
-    entry = _safe_float(indicators.get("entry"))
-    stop = _safe_float(indicators.get("stop"))
-    target = _safe_float(indicators.get("target"))
-    data_quality = indicators.get("dataQuality") or {}
+    current_price = _safe_float(option_price.get("ask"))
+    bid = _safe_float(option_price.get("bid"))
+    ask = _safe_float(option_price.get("ask"))
+    volume = _safe_float(option_liquidity.get("volume"))
+    spread_pct = _safe_float(option_price.get("spreadPct"))
+    spread_abs = _safe_float(option_price.get("spread"))
+    deviation_pct = _safe_float(option_price.get("priceDeviationPct"))
+    risk_reward = _safe_float(move_estimates.get("estimatedRiskReward"))
+    entry = _safe_float(underlying.get("entry"))
+    stop = _safe_float(underlying.get("stop"))
+    target = _safe_float(underlying.get("target"))
 
     checks = {
         "strategyImplemented": _check(True, strategy=strategy),
@@ -93,12 +96,13 @@ def validate_alert_contract(
             thresholdPct=PRICE_DEVIATION_THRESHOLD_PCT,
         ),
         "liquidity": _check(
-            bool(data_quality.get("optionQuoteOk")) and volume is not None and volume >= MIN_VOLUME,
+            bid is not None and bid > 0
+            and ask is not None and ask > 0
+            and volume is not None and volume >= MIN_VOLUME,
             bid=bid,
             ask=ask,
             volume=volume,
-            openInterest=option.get("openInterest"),
-            optionQuoteOk=data_quality.get("optionQuoteOk"),
+            openInterest=option_liquidity.get("openInterest"),
         ),
         "riskReward": _check(
             risk_reward is not None and risk_reward >= MIN_RISK_REWARD,
@@ -106,6 +110,8 @@ def validate_alert_contract(
             stop=stop,
             target=target,
             riskReward=risk_reward,
+            estimatedLossPerContract=move_estimates.get("estimatedLossPerContract"),
+            estimatedRewardPerContract=move_estimates.get("estimatedRewardPerContract"),
             threshold=MIN_RISK_REWARD,
         ),
     }

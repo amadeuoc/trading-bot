@@ -2,7 +2,6 @@ from typing import Any, Dict, Optional
 
 from app.market_data.indicators import calculate_indicators
 from app.market_data.provider import get_market_context
-from app.validators.ultra_short import build_ultra_short_gex_trade_plan
 
 
 def _safe_float(value) -> Optional[float]:
@@ -51,77 +50,6 @@ def _all_walls(gex_context: Optional[Dict[str, Any]]) -> list:
     ]
 
 
-def _build_trade_plan(
-    normalized_alert: Dict[str, Any],
-    classification: Dict[str, Any],
-    market_context: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    strategy = classification.get("strategy")
-    if strategy != "ultra_short":
-        return None
-
-    gex_context = market_context.get("gex_context") or market_context.get("gex")
-    if not gex_context:
-        return None
-
-    underlying = market_context.get("underlying") or {}
-    alert_side = (normalized_alert.get("option") or {}).get("type")
-    return build_ultra_short_gex_trade_plan(
-        alert_side,
-        underlying.get("price"),
-        gex_context,
-    )
-
-
-def _selected_walls(trade_plan: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    selected_wall_above = None
-    selected_wall_below = None
-
-    if isinstance(trade_plan, dict):
-        for wall in (
-            trade_plan.get("targetWall"),
-            trade_plan.get("stopWall"),
-            trade_plan.get("checkpointWall"),
-        ):
-            summary = _summarize_wall(wall)
-            if _wall_position(wall) == "above" and selected_wall_above is None:
-                selected_wall_above = summary
-            if _wall_position(wall) == "below" and selected_wall_below is None:
-                selected_wall_below = summary
-
-    return {
-        "selectedWallAbove": selected_wall_above,
-        "selectedWallBelow": selected_wall_below,
-    }
-
-
-def _risk_reward(normalized_alert: Dict[str, Any], trade_plan: Optional[Dict[str, Any]]) -> Optional[float]:
-    if not isinstance(trade_plan, dict):
-        return None
-
-    entry = _safe_float(trade_plan.get("entry"))
-    stop = _safe_float(trade_plan.get("stop"))
-    target = _safe_float(trade_plan.get("target"))
-    alert_side = (normalized_alert.get("option") or {}).get("type")
-
-    if entry is None or stop is None or target is None:
-        return None
-
-    if alert_side == "CALL":
-        risk = entry - stop
-        reward = target - entry
-    elif alert_side == "PUT":
-        risk = stop - entry
-        reward = entry - target
-    else:
-        return None
-
-    if risk <= 0 or reward <= 0:
-        return None
-
-    return reward / risk
-
-
 def _missing_fields(market_context: Dict[str, Any], indicators: Dict[str, Any]) -> list:
     missing = []
     option = market_context.get("option") or {}
@@ -150,35 +78,7 @@ def build_indicators_contract(
     raw_indicators = calculate_indicators(normalized_alert, market_context)
     market_context["indicators"] = raw_indicators
 
-    option = market_context.get("option") or {}
-    underlying = market_context.get("underlying") or {}
-    gex_context = market_context.get("gex_context")
-    trade_plan = _build_trade_plan(normalized_alert, classification, market_context)
-    selected_walls = _selected_walls(trade_plan)
-
-    return {
-        "underlyingPrice": underlying.get("price"),
-        "option": _camel_option(option),
-        "priceDeviationPct": raw_indicators.get("price_deviation_pct"),
-        "spreadPct": raw_indicators.get("spread_pct"),
-        "spreadAbs": raw_indicators.get("spread"),
-        "liquidityScore": None,
-        "entry": trade_plan.get("entry") if isinstance(trade_plan, dict) else None,
-        "stop": trade_plan.get("stop") if isinstance(trade_plan, dict) else None,
-        "target": trade_plan.get("target") if isinstance(trade_plan, dict) else None,
-        "riskReward": _risk_reward(normalized_alert, trade_plan),
-        "gex": {
-            "walls": selected_walls,
-            "allWalls": _all_walls(gex_context),
-        },
-        "dataQuality": {
-            "underlyingOk": underlying.get("price") is not None,
-            "optionQuoteOk": option.get("bid") is not None and option.get("ask") is not None,
-            "optionChainOk": bool(market_context.get("optionChain")),
-            "gexOk": bool(gex_context),
-            "missingFields": _missing_fields(market_context, raw_indicators),
-        },
-    }
+    return raw_indicators
 
 
 def get_market_data_and_indicators(
