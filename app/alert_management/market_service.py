@@ -4,70 +4,27 @@ from app.market_data.indicators import calculate_indicators
 from app.market_data.provider import get_market_context
 
 
-def _safe_float(value) -> Optional[float]:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _camel_option(option: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "bid": option.get("bid"),
-        "ask": option.get("ask"),
-        "last": option.get("last"),
-        "volume": option.get("volume"),
-        "openInterest": option.get("open_interest"),
-    }
-
-
-def _wall_position(wall: Optional[Dict[str, Any]]) -> Optional[str]:
-    return wall.get("position") if isinstance(wall, dict) else None
-
-
-def _summarize_wall(wall: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not isinstance(wall, dict):
-        return None
-
-    return {
-        "strike": wall.get("strike"),
-        "position": wall.get("position"),
-        "distanceFromSpot": wall.get("distance_from_spot"),
-        "distancePctFromSpot": wall.get("distance_pct_from_spot"),
-        "hybridStrength": wall.get("hybrid_strength"),
-        "sign": wall.get("sign"),
-        "behavior": wall.get("behavior"),
-    }
-
-
-def _all_walls(gex_context: Optional[Dict[str, Any]]) -> list:
+def _public_gex_context(gex_context: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not isinstance(gex_context, dict):
-        return []
-    return [
-        _summarize_wall(wall)
-        for wall in gex_context.get("walls") or []
-        if isinstance(wall, dict)
-    ]
+        return None
+
+    return {
+        "source": gex_context.get("source"),
+        "spot": gex_context.get("spot"),
+        "dteMax": gex_context.get("dte_max"),
+        "rangePct": gex_context.get("range_pct"),
+        "points": gex_context.get("points") or [],
+        "walls": gex_context.get("walls") or [],
+    }
 
 
-def _missing_fields(market_context: Dict[str, Any], indicators: Dict[str, Any]) -> list:
-    missing = []
-    option = market_context.get("option") or {}
-    underlying = market_context.get("underlying") or {}
-
-    for field in ("bid", "ask", "volume"):
-        if option.get(field) is None:
-            missing.append(f"option.{field}")
-    if option.get("open_interest") is None:
-        missing.append("option.open_interest")
-    if underlying.get("price") is None:
-        missing.append("underlying.price")
-    if indicators.get("price_deviation_pct") is None:
-        missing.append("price_deviation_pct")
-    if indicators.get("spread_pct") is None:
-        missing.append("spread_pct")
-
-    return missing
+def _public_market_data(market_context: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "option": market_context.get("option") or {},
+        "underlying": market_context.get("underlying") or {},
+        "optionChain": market_context.get("optionChain") or [],
+        "gexContext": _public_gex_context(market_context.get("gex_context")),
+    }
 
 
 def build_indicators_contract(
@@ -94,6 +51,6 @@ def get_market_data_and_indicators(
 
     return {
         "status": "ok",
-        "marketContext": market_context,
+        "marketData": _public_market_data(market_context),
         "indicators": indicators,
     }

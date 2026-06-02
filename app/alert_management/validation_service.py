@@ -61,6 +61,8 @@ def validate_alert_contract(
     spread_abs = _safe_float(option_price.get("spread"))
     deviation_pct = _safe_float(option_price.get("priceDeviationPct"))
     risk_reward = _safe_float(move_estimates.get("estimatedRiskReward"))
+    estimated_loss_per_contract = _safe_float(move_estimates.get("estimatedLossPerContract"))
+    estimated_reward_per_contract = _safe_float(move_estimates.get("estimatedRewardPerContract"))
     entry = _safe_float(underlying.get("entry"))
     stop = _safe_float(underlying.get("stop"))
     target = _safe_float(underlying.get("target"))
@@ -105,13 +107,21 @@ def validate_alert_contract(
             openInterest=option_liquidity.get("openInterest"),
         ),
         "riskReward": _check(
-            risk_reward is not None and risk_reward >= MIN_RISK_REWARD,
+            entry is not None
+            and stop is not None
+            and target is not None
+            and estimated_loss_per_contract is not None
+            and estimated_loss_per_contract > 0
+            and estimated_reward_per_contract is not None
+            and estimated_reward_per_contract > 0
+            and risk_reward is not None
+            and risk_reward >= MIN_RISK_REWARD,
             entry=entry,
             stop=stop,
             target=target,
             riskReward=risk_reward,
-            estimatedLossPerContract=move_estimates.get("estimatedLossPerContract"),
-            estimatedRewardPerContract=move_estimates.get("estimatedRewardPerContract"),
+            estimatedLossPerContract=estimated_loss_per_contract,
+            estimatedRewardPerContract=estimated_reward_per_contract,
             threshold=MIN_RISK_REWARD,
         ),
     }

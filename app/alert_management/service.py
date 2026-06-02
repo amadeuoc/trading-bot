@@ -71,7 +71,7 @@ def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "status": "error",
             "classification": {},
-            "marketContext": {},
+            "marketDataAndIndicators": {},
             "validation": {
                 "status": "error",
                 "decision": "SKIP",
@@ -82,11 +82,11 @@ def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     classification_response = classify_normalized_alert(normalized)
-    market_context_response = get_market_data_and_indicators(
+    market_data_and_indicators_response = get_market_data_and_indicators(
         normalized,
         classification_response,
     )
-    indicators = market_context_response.get("indicators") or {}
+    indicators = market_data_and_indicators_response.get("indicators") or {}
     validation_response = validate_alert_contract(
         normalized,
         classification_response,
@@ -106,7 +106,7 @@ def manage_alert(raw_alert: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": "ok",
         "classification": classification_response,
-        "marketContext": market_context_response,
+        "marketDataAndIndicators": market_data_and_indicators_response,
         "validation": validation_response,
         "orderProposal": order_proposal,
     }
