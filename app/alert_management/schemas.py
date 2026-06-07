@@ -64,3 +64,31 @@ class BuildOrderProposalRequest(BaseModel):
     entry: Entry = Field(default_factory=Entry)
     exitRules: ExitRules = Field(default_factory=ExitRules)
     risk: Risk = Field(default_factory=Risk)
+
+
+class PrepareOrderOption(BaseModel):
+    right: Optional[str] = None
+    strike: Optional[float] = None
+    expiration: Optional[str] = None
+
+
+class PrepareOrderStop(BaseModel):
+    type: Optional[str] = None
+    price: Optional[float] = None
+
+
+class PrepareOrderTarget(BaseModel):
+    mode: Optional[str] = None
+    type: Optional[str] = None
+    price: Optional[float] = None
+
+
+class PrepareOrderRequest(BaseModel):
+    assetType: Optional[str] = None
+    ticker: Optional[str] = None
+    action: Optional[str] = None
+    option: Optional[PrepareOrderOption] = None
+    entryPrice: Optional[float] = None
+    stop: PrepareOrderStop = Field(default_factory=PrepareOrderStop)
+    target: PrepareOrderTarget = Field(default_factory=PrepareOrderTarget)
+    maxRiskAmount: Optional[float] = None

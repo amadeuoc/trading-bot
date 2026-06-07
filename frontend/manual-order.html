@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Manual Order Preparation</title>
+
+<style>
+body {
+  background:#0f1115;
+  color:#f4f4f5;
+  font-family:Arial, sans-serif;
+  margin:24px;
+}
+input, select, button {
+  padding:10px;
+  border-radius:8px;
+  border:1px solid #333;
+  margin:4px;
+  background:#111318;
+  color:#f4f4f5;
+}
+button { cursor:pointer; font-weight:bold; }
+.card {
+  border:1px solid #2a2d35;
+  background:#171a21;
+  padding:14px;
+  margin:10px 0;
+  border-radius:12px;
+}
+.row {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  margin:8px 0;
+}
+.field {
+  display:flex;
+  flex-direction:column;
+  margin-right:10px;
+  margin-bottom:8px;
+}
+.field label {
+  color:#a1a1aa;
+  font-size:13px;
+  margin-left:4px;
+}
+.meta {
+  color:#a1a1aa;
+  font-size:13px;
+}
+.badge {
+  display:inline-block;
+  padding:3px 8px;
+  border-radius:999px;
+  background:#272b35;
+  margin-right:5px;
+  font-size:12px;
+}
+.success {
+  border-color:#22c55e;
+  background:#13251a;
+}
+.rejected, .error {
+  border-color:#ef4444;
+  background:#2a1111;
+}
+pre {
+  white-space:pre-wrap;
+  font-size:12px;
+  background:#09090b;
+  padding:10px;
+  border-radius:8px;
+  overflow:auto;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Manual Order Preparation</h2>
+
+<div style="margin:12px 0">
+  <a href="index.html">
+    <button type="button">Back to Alerts</button>
+  </a>
+</div>
+
+<div class="card">
+  <div class="row">
+    <div class="field">
+      <label for="assetType">Asset type</label>
+      <select id="assetType">
+        <option value="STOCK">STOCK</option>
+        <option value="OPTION">OPTION</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="stockFields">
+    <div class="row">
+      <div class="field">
+        <label for="stockTicker">Ticker</label>
+        <input id="stockTicker" placeholder="MSFT" />
+      </div>
+      <div class="field">
+        <label for="stockEntry">Entry price</label>
+        <input id="stockEntry" type="number" step="0.01" placeholder="445" />
+      </div>
+      <div class="field">
+        <label for="stockStop">Stop price</label>
+        <input id="stockStop" type="number" step="0.01" placeholder="440" />
+      </div>
+      <div class="field">
+        <label for="stockTarget">Target price</label>
+        <input id="stockTarget" type="number" step="0.01" placeholder="455" />
+      </div>
+      <div class="field">
+        <label for="stockMaxRisk">Max risk amount</label>
+        <input id="stockMaxRisk" type="number" step="1" placeholder="500" />
+      </div>
+    </div>
+  </div>
+
+  <div id="optionFields" style="display:none">
+    <div class="row">
+      <div class="field">
+        <label for="optionTicker">Underlying ticker</label>
+        <input id="optionTicker" placeholder="MSFT" />
+      </div>
+      <div class="field">
+        <label for="optionRight">Option right</label>
+        <select id="optionRight">
+          <option value="CALL">CALL</option>
+          <option value="PUT">PUT</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="optionExpiration">Expiration date</label>
+        <input id="optionExpiration" type="date" />
+      </div>
+      <div class="field">
+        <label for="optionStrike">Strike</label>
+        <input id="optionStrike" type="number" step="0.01" placeholder="445" />
+      </div>
+      <div class="field">
+        <label for="optionEntry">Entry option price</label>
+        <input id="optionEntry" type="number" step="0.01" placeholder="4.25" />
+      </div>
+      <div class="field">
+        <label for="optionStop">Stop underlying price</label>
+        <input id="optionStop" type="number" step="0.01" placeholder="440" />
+      </div>
+      <div class="field">
+        <label for="optionTarget">Target underlying price</label>
+        <input id="optionTarget" type="number" step="0.01" placeholder="456" />
+      </div>
+      <div class="field">
+        <label for="optionMaxRisk">Max risk amount</label>
+        <input id="optionMaxRisk" type="number" step="1" placeholder="500" />
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:10px">
+    <button id="prepareBtn" type="button">Prepare order</button>
+  </div>
+</div>
+
+<div id="result"></div>
+
+<script>
+const assetTypeEl = document.getElementById("assetType");
+const stockFieldsEl = document.getElementById("stockFields");
+const optionFieldsEl = document.getElementById("optionFields");
+const resultEl = document.getElementById("result");
+
+function numberValue(id) {
+  const value = Number(document.getElementById(id).value);
+  return Number.isFinite(value) ? value : null;
+}
+
+function textValue(id) {
+  return document.getElementById(id).value.trim();
+}
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function money(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "N/A";
+  return "$" + n.toFixed(2);
+}
+
+function updateVisibleFields() {
+  const assetType = assetTypeEl.value;
+  stockFieldsEl.style.display = assetType === "STOCK" ? "" : "none";
+  optionFieldsEl.style.display = assetType === "OPTION" ? "" : "none";
+}
+
+function buildPayload() {
+  if (assetTypeEl.value === "STOCK") {
+    return {
+      assetType: "STOCK",
+      ticker: textValue("stockTicker").toUpperCase(),
+      action: "BUY",
+      entryPrice: numberValue("stockEntry"),
+      stop: {
+        type: "INSTRUMENT_PRICE",
+        price: numberValue("stockStop")
+      },
+      target: {
+        mode: "FIXED",
+        type: "INSTRUMENT_PRICE",
+        price: numberValue("stockTarget")
+      },
+      maxRiskAmount: numberValue("stockMaxRisk")
+    };
+  }
+
+  return {
+    assetType: "OPTION",
+    ticker: textValue("optionTicker").toUpperCase(),
+    action: "BUY",
+    option: {
+      right: document.getElementById("optionRight").value,
+      strike: numberValue("optionStrike"),
+      expiration: textValue("optionExpiration")
+    },
+    entryPrice: numberValue("optionEntry"),
+    stop: {
+      type: "UNDERLYING_PRICE",
+      price: numberValue("optionStop")
+    },
+    target: {
+      mode: "FIXED",
+      type: "UNDERLYING_PRICE",
+      price: numberValue("optionTarget")
+    },
+    maxRiskAmount: numberValue("optionMaxRisk")
+  };
+}
+
+function renderResult(response) {
+  const proposal = response?.orderProposal;
+  const status = response?.status;
+  const className = status === "ok" ? "success" : "rejected";
+
+  if (status === "ok" && proposal) {
+    resultEl.innerHTML = `
+      <div class="card ${className}">
+        <div>
+          <span class="badge">${escapeHtml(proposal.assetType)}</span>
+          <span class="badge">${escapeHtml(proposal.action)}</span>
+          <b>${escapeHtml(proposal.symbol)}</b>
+        </div>
+
+        <div class="row">
+          <span class="badge">Quantity: ${escapeHtml(proposal.quantity)}</span>
+          <span class="badge">Risk: ${escapeHtml(money(proposal.risk?.estimatedTotalRisk))}</span>
+          <span class="badge">Reward: ${escapeHtml(money(proposal.reward?.estimatedTotalReward))}</span>
+          <span class="badge">RR: ${escapeHtml(proposal.reward?.estimatedRiskReward ?? "N/A")}</span>
+        </div>
+
+        <div class="meta">
+          Entry order: ${escapeHtml(JSON.stringify(proposal.entryOrder))}
+        </div>
+        <div class="meta">
+          Stop rule: ${escapeHtml(JSON.stringify(proposal.exitRules?.stop))}
+        </div>
+        <div class="meta">
+          Target rule: ${escapeHtml(JSON.stringify(proposal.exitRules?.target))}
+        </div>
+        <div class="meta">
+          Sizing method: ${escapeHtml(proposal.sizingMethod)}
+        </div>
+
+        <details style="margin-top:10px" open>
+          <summary>Full JSON</summary>
+          <pre>${escapeHtml(JSON.stringify(response, null, 2))}</pre>
+        </details>
+      </div>
+    `;
+    return;
+  }
+
+  resultEl.innerHTML = `
+    <div class="card ${className}">
+      <b>Order rejected</b>
+      <div class="meta" style="margin-top:8px">
+        ${escapeHtml(response?.reason || "Unknown rejection reason")}
+      </div>
+      <details style="margin-top:10px" open>
+        <summary>Full JSON</summary>
+        <pre>${escapeHtml(JSON.stringify(response, null, 2))}</pre>
+      </details>
+    </div>
+  `;
+}
+
+async function prepareOrder() {
+  resultEl.innerHTML = `
+    <div class="card">
+      <div class="meta">Preparing order...</div>
+    </div>
+  `;
+
+  try {
+    const res = await fetch("http://localhost:8000/orders/prepare", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(buildPayload())
+    });
+
+    const response = await res.json();
+    renderResult(response);
+  } catch (err) {
+    resultEl.innerHTML = `
+      <div class="card error">
+        <b>Request failed</b>
+        <div class="meta" style="margin-top:8px">${escapeHtml(err.message)}</div>
+      </div>
+    `;
+  }
+}
+
+assetTypeEl.addEventListener("change", updateVisibleFields);
+document.getElementById("prepareBtn").addEventListener("click", prepareOrder);
+updateVisibleFields();
+</script>
+
+</body>
+</html>

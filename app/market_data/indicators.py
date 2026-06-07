@@ -2,11 +2,13 @@ import os
 from typing import Optional
 
 from app.market_data.gex import compute_stop_buffer, compute_target_buffer
+from app.market_data.option_estimates import (
+    MOVE_ESTIMATE_SAFETY_MULTIPLIER,
+    estimate_option_move_from_underlying_levels,
+)
 
 
 DEBUG_OPTION_CHAIN = os.getenv("DEBUG_OPTION_CHAIN", "").lower() in ("1", "true", "yes")
-MOVE_ESTIMATE_METHOD = "delta_gamma_spread_buffer"
-MOVE_ESTIMATE_SAFETY_MULTIPLIER = 1.2
 ACCELERATOR_STRENGTH_RATIO = 0.75
 
 
@@ -452,51 +454,16 @@ def _get_option_greeks(market_context: dict) -> dict:
 
 
 def _get_move_estimates(underlying: dict, option_price: dict, greeks: dict):
-    delta = _safe_float(greeks.get("delta"))
-    gamma = _safe_float(greeks.get("gamma"))
-    bid = _safe_positive_float(option_price.get("bid"))
-    ask = _safe_positive_float(option_price.get("ask"))
-    entry = _safe_float(underlying.get("entry"))
-    stop = _safe_float(underlying.get("stop"))
-    target = _safe_float(underlying.get("target"))
-
-    if None in (delta, gamma, bid, ask, entry, stop, target):
-        return None
-
-    stop_distance = abs(entry - stop)
-    target_distance = abs(target - entry)
-    spread = ask - bid
-
-    estimated_loss = (
-        abs(delta) * stop_distance
-        + 0.5 * abs(gamma) * stop_distance ** 2
-        + spread * 0.5
-    ) * MOVE_ESTIMATE_SAFETY_MULTIPLIER
-
-    estimated_gain = (
-        abs(delta) * target_distance
-        + 0.5 * abs(gamma) * target_distance ** 2
-        - spread * 0.5
+    return estimate_option_move_from_underlying_levels(
+        bid=option_price.get("bid"),
+        ask=option_price.get("ask"),
+        delta=greeks.get("delta"),
+        gamma=greeks.get("gamma"),
+        underlying_entry=underlying.get("entry"),
+        underlying_stop=underlying.get("stop"),
+        underlying_target=underlying.get("target"),
+        safety_multiplier=MOVE_ESTIMATE_SAFETY_MULTIPLIER,
     )
-
-    estimated_loss_per_contract = estimated_loss * 100
-    estimated_reward_per_contract = estimated_gain * 100
-
-    return {
-        "method": MOVE_ESTIMATE_METHOD,
-        "safetyMultiplier": MOVE_ESTIMATE_SAFETY_MULTIPLIER,
-        "estimatedOptionLossToStop": estimated_loss,
-        "estimatedOptionGainToTarget": estimated_gain,
-        "estimatedOptionPriceAtStop": max(0.01, ask - estimated_loss),
-        "estimatedOptionPriceAtTarget": max(0.01, ask + estimated_gain),
-        "estimatedLossPerContract": estimated_loss_per_contract,
-        "estimatedRewardPerContract": estimated_reward_per_contract,
-        "estimatedRiskReward": (
-            estimated_reward_per_contract / estimated_loss_per_contract
-            if estimated_loss_per_contract > 0
-            else None
-        ),
-    }
 
 
 def _same_level(level: dict, selected_level: Optional[dict]) -> bool:

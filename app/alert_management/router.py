@@ -3,11 +3,13 @@ from fastapi import APIRouter
 from app.alert_management.classification_service import classify_normalized_alert
 from app.alert_management.market_service import get_market_data_and_indicators
 from app.alert_management.order_service import build_order_proposal
+from app.alert_management.order_prepare_service import prepare_order
 from app.alert_management.schemas import (
     BuildOrderProposalRequest,
     ClassifyAlertRequest,
     ManageAlertRequest,
     MarketDataAndIndicatorsRequest,
+    PrepareOrderRequest,
     ValidateAlertRequest,
 )
 from app.alert_management.service import manage_alert
@@ -62,3 +64,8 @@ def build_order_proposal_endpoint(req: BuildOrderProposalRequest):
             _model_to_dict(req.risk),
         ),
     }
+
+
+@router.post("/orders/prepare")
+def prepare_order_endpoint(req: PrepareOrderRequest):
+    return prepare_order(_model_to_dict(req))
